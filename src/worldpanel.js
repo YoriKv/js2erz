@@ -91,6 +91,8 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
       <button type="button" class="wp-rand" data-k="sim.rand"></button>
       <button type="button" class="wp-clear" data-k="sim.clear" data-kt="sim.clearTip"></button>
       <button type="button" class="wp-fit" data-k="sim.fit"></button>
+      <button type="button" class="wp-undo" data-kt="hud.undo" data-ka="hud.undo" disabled>↶</button>
+      <button type="button" class="wp-redo" data-kt="hud.redo" data-ka="hud.redo" disabled>↷</button>
     </div>
     <div class="wp-row wp-seis" hidden>
       <button type="button" class="wp-trig" data-k="seis.trigger" data-kt="seis.triggerTip"></button>
@@ -155,7 +157,26 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
   renderBrushes();
   renderHint();
 
-  function newWorld(w) { reset(); state.world = w; seedIn.value = w.seed ?? ""; save(state); fit(); update(); }
+  // ---------------------------------------------------------------- drawing history (Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z)
+  const hist = { undo: [], redo: [] }, HIST_MAX = 60;
+  const cloneWorld = w => JSON.parse(JSON.stringify(w));
+  function updHist() { $(".wp-undo").disabled = !hist.undo.length; $(".wp-redo").disabled = !hist.redo.length; }
+  function pushUndo(before) {
+    hist.undo.push(before); if (hist.undo.length > HIST_MAX) hist.undo.shift();
+    hist.redo = []; updHist();
+  }
+  function stepHist(from, to) {
+    if (!hist[from].length) return;
+    if (sim) { if (sim.status === "run" && !paused) return; reset(); onCurrent(null); }
+    const cur = state.world, next = hist[from].pop();
+    hist[to].push(cloneWorld(cur));
+    state.world = next; seedIn.value = next.seed ?? "";
+    save(state);
+    if (next.W !== cur.W || next.H !== cur.H) fit();
+    update(); updHist();
+  }
+  const undo = () => stepHist("undo", "redo"), redo = () => stepHist("redo", "undo");
+  function newWorld(w) { pushUndo(cloneWorld(state.world)); reset(); state.world = w; seedIn.value = w.seed ?? ""; save(state); fit(); update(); }
   const curSize = () => sizeSel.value.split("x").map(Number);
   const scenSel = $(".wp-scen");
   scenSel.value = state.settings.scenario;
@@ -164,6 +185,21 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
   $(".wp-rand").addEventListener("click", () => generate());
   $(".wp-clear").addEventListener("click", () => { const [W, H] = curSize(); newWorld(emptyWorld(W, H)); });
   $(".wp-fit").addEventListener("click", () => fit());
+  $(".wp-undo").addEventListener("click", undo);
+  $(".wp-redo").addEventListener("click", redo);
+  // the keys act on the drawing when the last click was in this panel (the graph has its own undo)
+  let panelFocus = false;
+  document.addEventListener("pointerdown", e => { panelFocus = root.contains(e.target); }, true);
+  window.addEventListener("keydown", e => {
+    if (!panelFocus || !root.offsetParent || !(e.ctrlKey || e.metaKey) || e.altKey) return;
+    const a = document.activeElement;
+    if (a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" || a.tagName === "SELECT")) return;
+    const k = e.key.toLowerCase();
+    if (k === "z" && !e.shiftKey) undo();
+    else if (k === "y" || (k === "z" && e.shiftKey)) redo();
+    else return;
+    e.preventDefault(); e.stopImmediatePropagation();
+  }, true);
   sizeSel.addEventListener("change", () => generate(state.world.seed ?? undefined));
   scenSel.addEventListener("change", () => {
     state.settings.scenario = scenSel.value;
@@ -413,8 +449,9 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
     const x0 = Math.max(0, Math.min(r.x0, r.x1)), x1 = Math.min(w.W - 1, Math.max(r.x0, r.x1));
     const y0 = Math.max(0, Math.min(r.y0, r.y1)), y1 = Math.min(w.H - 1, Math.max(r.y0, r.y1));
     let n = 0;
+    const before = cloneWorld(w);
     for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (setCell(w, x, y, state.settings.brush)) n++;
-    if (n) save(state);
+    if (n) { pushUndo(before); save(state); }
     draw(); renderInfo(); updSeis();
   }
   function paint(e) {
@@ -434,6 +471,7 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
       w.bot = { x: bx, y: by };
       for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) w.cells[(by + dy) * w.W + bx + dx] = "Back";
     } else if (!setCell(w, x, y, state.settings.brush)) return;
+    if (!drag.dirty && drag.before) pushUndo(drag.before);
     drag.dirty = true;
     draw(); renderInfo(); updSeis();
   }
@@ -450,7 +488,7 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
       drag = { rect: true, x0: x, y0: y, x1: x, y1: y };
       draw(); return;
     }
-    drag = { pan: false }; paint(e);
+    drag = { pan: false, before: cloneWorld(state.world) }; paint(e);
   });
   cv.addEventListener("pointermove", e => {
     const hc = cellOf(e), moved = !hoverCell || hc[0] !== hoverCell[0] || hc[1] !== hoverCell[1];
