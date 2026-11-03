@@ -164,7 +164,7 @@ test("makeWorld is deterministic per seed", () => {
   assert.deepEqual(a.cells, b.cells);
   assert.equal(a.cells.length, 96 * 72);
   assert.equal(cellAt(a, a.bot.x, a.bot.y), "Back");
-  assert.ok(a.cells.includes("Road"));
+  assert.ok(!a.cells.includes("Road"), "no roads in generated worlds");
 });
 
 // ---------------------------------------------------------------- seismic initiator
@@ -369,10 +369,9 @@ test("seismic example: digs the disc, leaves the radius and survives the break",
   const { EXAMPLES } = await import("../src/examples.js");
   const r = compile(EXAMPLES.find(e => e.id === "seismic").code);
   const s = createSim({ programs: new Map(r.programs.map(p => [p.name, p])), main: r.programs[0].name, world: seismicWorld(2) });
-  const o = s.seismic.list[0];
-  s.run(100000);
-  assert.equal(o.state, "working", `share ${o.share}`);
-  s.run(600000);
+  // the field takes about 100k nodes to dig to 80%, then the initiator works 603k nodes before it breaks
+  for (let n = 0; n < 1000000 && s.status === "run" && !s.log.some(l => l.includes("over:")); n += 10000) s.run(10000);
+  assert.ok(s.log.some(l => l.includes("started working")), "the lanes started the initiator");
   assert.ok(s.log.some(l => l.includes("over:")), "a break has happened");
   assert.equal(s.status, "run"); assert.equal(s.dead, null);
 });

@@ -215,13 +215,6 @@ export function makeWorld(W = 96, H = 72, seed) {
   seed = toSeed(seed);
   const { cells, ores, host } = terrain(W, H, mulberry32(seed));
   const bot = { x: W >> 1, y: H >> 1 };
-  const set = (x, y, c) => { if (x > 0 && y > 0 && x < W - 1 && y < H - 1) cells[y * W + x] = c; };
-  // a road ring west of the bot, so road-following programs work at once
-  const R = 8, rcx = bot.x - 13, rcy = bot.y;
-  for (let a = 0; a < 360; a++) {
-    const x = Math.round(rcx + R * Math.cos(a * Math.PI / 180)), y = Math.round(rcy + R * Math.sin(a * Math.PI / 180));
-    for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) set(x + dx, y + dy, "Road");
-  }
   const w = { W, H, seed, cells, bot, ores };
   clearPocket(w, bot.x, bot.y, host);
   return w;
