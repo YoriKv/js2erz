@@ -177,7 +177,7 @@ function seismicWorld(seed) {
   return w;
 }
 
-// a room of Regolith with an initiator centred on (30, 30); break centre (31, 31) with the default offset
+// a room of Regolith with an initiator centred on (30, 30); the break centres on it
 function rockRoom(W = 90, H = 80) {
   const w = emptyWorld(W, H);
   for (let i = 0; i < w.cells.length; i++) if (w.cells[i] === "Back") w.cells[i] = "Regolith";
@@ -186,7 +186,7 @@ function rockRoom(W = 90, H = 80) {
 }
 const idle = () => prog("m", [["pass", [1]]]);                // runs forever
 // dig every rock cell of the disc whose distance from the break centre is >= rmin (and optionally < rmax)
-function digDisc(w, share, { cx = 31, cy = 31, R = 40 } = {}) {
+function digDisc(w, share, { cx = 30, cy = 30, R = 40 } = {}) {
   const cells = [];
   for (let y = 0; y < w.H; y++) for (let x = 0; x < w.W; x++) {
     const d2 = (x - cx) ** 2 + (y - cy) ** 2;
@@ -226,7 +226,7 @@ test("seismic: starts working at the threshold, breaks after workSec * nodesPerS
   assert.equal(o.state, "working"); assert.equal(o.left, 1);
   s.step();
   assert.equal(o.state, "breaking");
-  assert.ok(s.log.some(l => l.startsWith("Seismic break at (31, 31), radius 40")));
+  assert.ok(s.log.some(l => l.startsWith("Seismic break at (30, 30), radius 40")));
   s.run(10);
   assert.equal(o.state, "idle"); assert.ok(o.refilled > 0);
   assert.ok(o.share < 0.2, `share after the break ${o.share}`);   // the rim ring refills only in part
@@ -245,6 +245,26 @@ test("seismic: mining in the disc raises the share and triggers the initiator", 
   assert.equal(o.state, "working");
 });
 
+test("seismic: the break centres on the initiator; roads and the footprint count for nothing", () => {
+  const w = rockRoom();
+  digDisc(w, 0.5);
+  const o = w.initiators[0], R = SEISMIC_DEFAULTS.radius;
+  const share = () => minedShare(w, o);
+  const before = share();
+  // a road across the disc, half over rock, half over dug ground: removes cells from both counts
+  let open = 0, rock = 0;
+  for (let y = 0; y < w.H; y++) for (let x = 0; x < w.W; x++) {
+    if (Math.hypot(x - o.x, y - o.y) > R || initiatorAt(w, x, y) >= 0) continue;
+    const c = w.cells[y * w.W + x];
+    if (x === 40 || y === 40) { w.cells[y * w.W + x] = "Road"; continue; }
+    if (c === "Back") open++; else if (c === "Regolith") rock++;
+  }
+  assert.ok(Math.abs(share() - open / (open + rock)) < 1e-9, `${share()} vs ${open / (open + rock)} (was ${before})`);
+  const s = createSim({ programs: progs(idle()), main: "m", world: w, seismic: { nodesPerSec: 1 } });
+  s.triggerBreak();
+  assert.ok(s.log.some(l => l.startsWith("Seismic break at (30, 30)")), s.log.join("\n"));
+});
+
 test("seismic: regrowth stays inside the disc and spares footprint and roads", () => {
   const w = emptyWorld(120, 100);                             // all open
   stampInitiator(w, 50, 50);
@@ -255,7 +275,7 @@ test("seismic: regrowth stays inside the disc and spares footprint and roads", (
   assert.equal(s.seismic.list[0].state, "working");
   s.triggerBreak();
   s.run(20);
-  const R = SEISMIC_DEFAULTS.radius, cx = 51, cy = 51;
+  const R = SEISMIC_DEFAULTS.radius, cx = 50, cy = 50;
   let inner = 0, innerRock = 0;
   for (let y = 1; y < w.H - 1; y++) for (let x = 1; x < w.W - 1; x++) {
     const c = cellAt(s.world, x, y), d = Math.hypot(x - cx, y - cy);
@@ -286,7 +306,7 @@ test("seismic: dug rock comes back as the rock it was", () => {
 
 test("seismic: a bot in the disc dies at the break, a bot outside survives", () => {
   const p = idle();
-  for (const [bx, by, dies] of [[50, 31, true], [65, 31, true], [74, 31, false]]) {   // 19, 34, 43 cells from (31, 31)
+  for (const [bx, by, dies] of [[50, 31, true], [65, 31, true], [74, 31, false]]) {   // 20, 35, 44 cells from (30, 30)
     const w = rockRoom(); w.bot = { x: bx, y: by };
     for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) w.cells[(by + dy) * w.W + bx + dx] = "Back";
     const s = createSim({ programs: progs(p), main: "m", world: w, seismic: { nodesPerSec: 1 } });
@@ -294,13 +314,13 @@ test("seismic: a bot in the disc dies at the break, a bot outside survives", () 
     assert.equal(s.dead != null, dies, `bot at ${bx},${by}`);
     if (dies) {
       assert.equal(s.status, "done"); assert.equal(s.result, "fail");
-      assert.match(s.log.join("\n"), /bot crushed by the seismic break at \(31, 31\)/);
+      assert.match(s.log.join("\n"), /bot crushed by the seismic break at \(30, 30\)/);
     } else assert.equal(s.status, "run");
   }
 });
 
 test("seismic: wave mode kills when the front arrives", () => {
-  const w = rockRoom(); w.bot = { x: 51, y: 31 };             // 20 cells out: the front gets there halfway through
+  const w = rockRoom(); w.bot = { x: 50, y: 30 };             // 20 cells out: the front gets there halfway through
   const s = createSim({ programs: progs(idle()), main: "m", world: w, seismic: { nodesPerSec: 10, deathMode: "wave" } });   // 100-node break
   s.triggerBreak();
   s.run(45); assert.equal(s.status, "run");
@@ -358,8 +378,8 @@ test("seismic example: digs the disc, leaves the radius and survives the break",
 });
 
 test("seismic: driving into the radius during the break is deadly too", () => {
-  const w = rockRoom(); w.bot = { x: 73, y: 31 };             // 42 cells out, facing west along an open lane
-  for (let y = 30; y <= 32; y++) for (let x = 60; x <= 74; x++) w.cells[y * w.W + x] = "Back";
+  const w = rockRoom(); w.bot = { x: 72, y: 30 };             // 42 cells out, facing west along an open lane
+  for (let y = 29; y <= 31; y++) for (let x = 59; x <= 73; x++) w.cells[y * w.W + x] = "Back";
   const p = prog("m", [["move", [1, null]]]);
   const s = createSim({ programs: progs(p), main: "m", world: w, dir: 4, seismic: { nodesPerSec: 10 } });
   s.triggerBreak();

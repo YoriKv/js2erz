@@ -243,7 +243,7 @@ export const cellAt = (w, x, y) => (x < 0 || y < 0 || x >= w.W || y >= w.H) ? "T
 // - World: `world.initiators = [{ x, y }]`, (x, y) = centre cell of the 5x5 footprint. The footprint cells are
 //   open ground: a bot can stand and drive on them, there is nothing to dig, and SCAN sees the ground, not the
 //   building (programs cannot see buildings in the game). Blocks and roads cannot be placed on a footprint.
-// - Break centre: the footprint centre + `offset` (the game reports it one cell right of and below the centre).
+// - Break centre: the footprint centre (+ `offset`, 0 by default).
 // - Mined share over the disc (distance <= radius, footprints left out): open cells / (open cells + diggable rock).
 //   Open = Back or Empty. Roads, blocks and walls count as neither; undiggable rock (MetallicCrust) counts as rock
 //   only with `countUndiggable` (unverified either way).
@@ -259,7 +259,7 @@ export const cellAt = (w, x, y) => (x < 0 || y < 0 || x >= w.W || y >= w.H) ? "T
 //   about 2 s after a break, 34 cells from the centre). A bot whose centre is on a footprint always survives,
 //   as in the game. Distances are from the bot's centre cell.
 export const SEISMIC_DEFAULTS = {
-  nodesPerSec: 1000, workSec: 603, breakSec: 10, radius: 40, fade: 6, threshold: 0.8, offset: [1, 1],
+  nodesPerSec: 1000, workSec: 603, breakSec: 10, radius: 40, fade: 6, threshold: 0.8, offset: [0, 0],
   deathMode: "break", countUndiggable: false, seed: undefined,
   mix: [["Regolith", 45], ["Chondrite", 25], ["Breccia", 15], ["SilicateRock", 5], ["SulfideRock", 5], ["DenseOre", 3], ["PhosphateRock", 2]],
 };
