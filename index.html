@@ -11,53 +11,52 @@
 <body>
 <div id="app">
   <header id="top">
-    <span class="brand">js2erz <small>JavaScript → Programmator</small></span>
+    <span class="brand">js2erz <small data-i18n="brand.sub">JavaScript → Programmator</small></span>
     <div class="grp">
-      <select id="exSel" aria-label="Examples"><option value="">Examples…</option></select>
-      <button id="bCompile" type="button" title="Compile now (Ctrl+Enter)">Compile</button>
-      <label title="Recompile while you type"><input type="checkbox" id="optLive" checked> live</label>
+      <select id="exSel" aria-label="Examples" data-i18n-aria="top.examplesAria"><option value="" data-i18n="top.examples">Examples…</option></select>
+      <button id="bCompile" type="button" title="Compile now (Ctrl+Enter)" data-i18n="top.compile" data-i18n-title="top.compileTip">Compile</button>
+      <label title="Recompile while you type" data-i18n-title="top.liveTip"><input type="checkbox" id="optLive" checked> <span data-i18n="top.live">live</span></label>
     </div>
-    <div class="grp" id="progTabs" role="tablist" aria-label="Programs"></div>
+    <div class="grp" id="progTabs" role="tablist" aria-label="Programs" data-i18n-aria="top.programs"></div>
     <div class="grp right">
-      <button id="bLayout" type="button" title="Lay the graph out again">Re-layout</button>
-      <label title="Show node numbers"><input type="checkbox" id="optIdx" checked> numbers</label>
-      <button id="bPng" type="button" title="Download the graph as a PNG image">PNG</button>
-      <button id="bSvg" type="button" title="Download the graph as an SVG image">SVG</button>
-      <button id="bJson" type="button" title="Export the graph as JSON">JSON…</button>
-      <button id="bImport" type="button" title="Import a program from JSON">Import…</button>
-      <button id="bShare" type="button" title="Copy a link that contains the code">Share link</button>
+      <button id="bLayout" type="button" title="Lay the graph out again" data-i18n="top.layout" data-i18n-title="top.layoutTip">Re-layout</button>
+      <label title="Show node numbers" data-i18n-title="top.numbersTip"><input type="checkbox" id="optIdx" checked> <span data-i18n="top.numbers">numbers</span></label>
+      <button id="bPng" type="button" title="Download the graph as a PNG image" data-i18n-title="top.pngTip">PNG</button>
+      <button id="bSvg" type="button" title="Download the graph as an SVG image" data-i18n-title="top.svgTip">SVG</button>
+      <button id="bJson" type="button" title="Export the graph as JSON" data-i18n="top.json" data-i18n-title="top.jsonTip">JSON…</button>
+      <button id="bImport" type="button" title="Import a program from JSON" data-i18n="top.import" data-i18n-title="top.importTip">Import…</button>
+      <button id="bShare" type="button" title="Copy a link that contains the code" data-i18n="top.share" data-i18n-title="top.shareTip">Share link</button>
+      <select id="langSel" aria-label="Language" data-i18n-aria="lang.label" data-i18n-title="lang.label" title="Language"></select>
     </div>
   </header>
   <div id="banner" hidden></div>
   <div id="main">
-    <section id="codePane" aria-label="Code">
+    <section id="codePane" aria-label="Code" data-i18n-aria="aria.code">
       <div id="editor"></div>
       <div id="diag" aria-live="polite"></div>
     </section>
-    <div class="split" id="split1" role="separator" aria-label="Resize code pane"></div>
-    <section id="graphPane" aria-label="Node graph">
+    <div class="split" id="split1" role="separator" aria-label="Resize code pane" data-i18n-aria="aria.split1"></div>
+    <section id="graphPane" aria-label="Node graph" data-i18n-aria="aria.graph">
       <svg id="cv" xmlns="http://www.w3.org/2000/svg"></svg>
       <div id="hud">
         <span id="count"></span>
-        <button id="bUndo" type="button" title="Undo (Ctrl+Z)">↶</button>
-        <button id="bRedo" type="button" title="Redo (Ctrl+Y)">↷</button>
-        <button id="bFit" type="button" title="Show all (F)">Fit</button>
-        <button id="bZoomIn" type="button" title="Zoom in">+</button>
-        <button id="bZoomOut" type="button" title="Zoom out">−</button>
+        <button id="bUndo" type="button" title="Undo (Ctrl+Z)" data-i18n-title="hud.undo" data-i18n-aria="hud.undo">↶</button>
+        <button id="bRedo" type="button" title="Redo (Ctrl+Y)" data-i18n-title="hud.redo" data-i18n-aria="hud.redo">↷</button>
+        <button id="bFit" type="button" title="Show all (F)" data-i18n="hud.fit" data-i18n-title="hud.fitTip">Fit</button>
+        <button id="bZoomIn" type="button" title="Zoom in" data-i18n-title="hud.zoomIn" data-i18n-aria="hud.zoomIn">+</button>
+        <button id="bZoomOut" type="button" title="Zoom out" data-i18n-title="hud.zoomOut" data-i18n-aria="hud.zoomOut">−</button>
       </div>
-      <nav id="palette" aria-label="Add a node"></nav>
+      <nav id="palette" aria-label="Add a node" data-i18n-aria="aria.palette"></nav>
     </section>
-    <div class="split" id="split2" role="separator" aria-label="Resize side panel"></div>
+    <div class="split" id="split2" role="separator" aria-label="Resize side panel" data-i18n-aria="aria.split2"></div>
     <aside id="side">
       <nav id="tabs" role="tablist">
-        <button type="button" data-tab="node" class="on">Node</button>
-        <button type="button" data-tab="world">Simulator</button>
-        <button type="button" data-tab="steps">Build list</button>
-        <button type="button" data-tab="ref">Reference</button>
+        <button type="button" data-tab="node" class="on" data-i18n="tab.node">Node</button>
+        <button type="button" data-tab="world" data-i18n="tab.world">Simulator</button>
+        <button type="button" data-tab="ref" data-i18n="tab.ref">Reference</button>
       </nav>
       <div class="tab" id="tab-node"></div>
       <div class="tab" id="tab-world" hidden></div>
-      <div class="tab" id="tab-steps" hidden></div>
       <div class="tab" id="tab-ref" hidden></div>
     </aside>
   </div>

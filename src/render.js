@@ -1,6 +1,6 @@
 // SVG rendering of a Program in the look of the in-game Programmator.
 // Used by the interactive canvas and by the PNG / SVG export.
-import { T, COL, TITLE, DIR_ARROW, REL_ROT, OP_SYM, CATEGORY_LABEL, fmtOperand } from "./nodes.js";
+import { T, COL, TITLE, DIRS, DIR_ARROW, REL_ROT, OP_SYM, CATEGORY_LABEL, fmtOperand } from "./nodes.js";
 import { U, HDR, sizePx, tiny, portPos, inPos } from "./geom.js";
 
 export const FONT = `"Tektur", "Bahnschrift", "Arial Narrow", "Roboto Condensed", sans-serif`;
@@ -78,6 +78,34 @@ function shade(hex, k, bg = [0x1d, 0x18, 0x14]) {
 const text = (x, y, s, { size = 15, fill = TITLE, anchor = "middle", weight = 400, opacity } = {}) =>
   `<text x="${x}" y="${y}" font-size="${size}" fill="${fill}" text-anchor="${anchor}" dominant-baseline="central" font-weight="${weight}"${opacity ? ` opacity="${opacity}"` : ""}>${esc(s)}</text>`;
 const fit = (s, max) => (s.length > max ? s.slice(0, max - 1) + "…" : s);
+// text shrunk to fit a width: font size down to `min`, then squeezed with textLength
+const CHAR_W = 0.6;
+function fitText(x, y, s, maxW, o = {}) {
+  s = String(s);
+  const size = o.size || 15, min = o.min || 10;
+  let fs = size, est = s.length * fs * CHAR_W;
+  if (est > maxW) { fs = Math.max(min, Math.floor(maxW / (s.length * CHAR_W) * 10) / 10); est = s.length * fs * CHAR_W; }
+  const squeeze = est > maxW ? ` textLength="${Math.floor(maxW)}" lengthAdjust="spacingAndGlyphs"` : "";
+  return text(x, y, s, { ...o, size: fs }).replace("<text ", `<text${squeeze} `);
+}
+// one line if it fits at 11px or more, else two lines split at the middle space
+function itemText(x, y, s, maxW) {
+  const sp = [...s.matchAll(/ /g)].map(m => m.index);
+  if (s.length * 11 * CHAR_W <= maxW || !sp.length) return fitText(x, y, s, maxW, { size: 12, min: 9 });
+  const k = sp.reduce((a, b) => (Math.abs(b - s.length / 2) < Math.abs(a - s.length / 2) ? b : a));
+  return fitText(x, y - 5, s.slice(0, k), maxW, { size: 11, min: 9 }) + fitText(x, y + 8, s.slice(k + 1), maxW, { size: 11, min: 9 });
+}
+// Words drawn on nodes. graphSvg / exportSvg take an optional `labels` object that overrides any of these
+// (the app passes the chosen UI language); the defaults are the English names.
+export const EN_LABELS = {
+  node: t => T[t].label,                      // header title
+  cat: c => CATEGORY_LABEL[c] || c,           // SCAN / CELL category
+  dir: d => DIRS[d],                          // ROT ABS direction letters
+  item: i => i,                               // USE item
+  target: x => x,                             // INVENTORY target
+  bot: () => "bot",                           // INVENTORY: this bot
+  outTip: (t, key, label) => label,           // output tooltip
+};
 
 function tokenLine(tokens, cx, y, w, size = 19) {
   const chars = tokens.reduce((a, [s]) => a + String(s ?? "?").length + 1, 0);
@@ -124,7 +152,7 @@ function aimGrid(n, cx, cy) {
   return s;
 }
 
-function nodeBody(n, w, h) {
+function nodeBody(n, w, h, L) {
   const p = n.p || {}, small = tiny(n), top = small ? 0 : HDR;
   const cx = w / 2, cy = top + (h - top) / 2 - (small ? 0 : 4);
   switch (n.t) {
@@ -141,7 +169,7 @@ function nodeBody(n, w, h) {
       return tokenLine([tok(p.value), ["∈", "o"]], cx, cy - (shown.length === 2 ? 18 : 12), w, 18) +
         shown.map((r, k) => tokenLine([[r, "c"]], cx, cy + (shown.length === 2 ? 2 + k * 17 : 12), w, 14)).join("");
     }
-    case "cell": return tokenLine([tok(p.value)], cx, cy - 14, w, 16) + tokenLine([["∈", "o"], [CATEGORY_LABEL[p.category] || p.category, "c"]], cx, cy + 12, w, 15);
+    case "cell": return tokenLine([tok(p.value)], cx, cy - 14, w, 16) + tokenLine([["∈", "o"], [L.cat(p.category), "c"]], cx, cy + 12, w, 15);
     case "aimA": case "aimR": {
       const sg = v => `${v > 0 ? "+" : ""}${v}`;
       const t1 = n.t === "aimR" ? `F ${sg(p.front)}  R ${sg(p.right)}` : `X ${sg(p.right)}  Y ${sg(p.front)}`;
@@ -149,7 +177,7 @@ function nodeBody(n, w, h) {
     }
     case "rotA": {
       const d = ((p.dir % 8) + 8) % 8;
-      return `<g transform="translate(${cx},${cy - 6}) rotate(${d * 45})"><circle r="17" fill="none" stroke="${TITLE}" stroke-opacity=".35" stroke-width="2"/><path d="M-11,0 H11 M3,-8 L12,0 L3,8" fill="none" stroke="${TITLE}" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/></g>` + text(cx, cy + 26, DIR_ARROW[d] + " " + ["E", "SE", "S", "SW", "W", "NW", "N", "NE"][d], { size: 13 });
+      return `<g transform="translate(${cx},${cy - 6}) rotate(${d * 45})"><circle r="17" fill="none" stroke="${TITLE}" stroke-opacity=".35" stroke-width="2"/><path d="M-11,0 H11 M3,-8 L12,0 L3,8" fill="none" stroke="${TITLE}" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/></g>` + text(cx, cy + 26, DIR_ARROW[d] + " " + L.dir(d), { size: 13 });
     }
     case "rotR": {
       const d = p.dir, cw = d > 0 || d === 4;
@@ -157,11 +185,11 @@ function nodeBody(n, w, h) {
       const head = cw ? `M${cx + 9},${cy - 3} L${cx + 6},${cy + 7} L${cx - 3},${cy + 4}` : `M${cx - 9},${cy - 3} L${cx - 6},${cy + 7} L${cx + 3},${cy + 4}`;
       return `<path d="${arc} ${head}" fill="none" stroke="${TITLE}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" transform="translate(0,-10)"/>` + text(cx, cy + 22, REL_ROT[d] || String(d), { size: 15 });
     }
-    case "scan": return `<g transform="translate(${cx},${cy - 10})"><circle r="15" fill="none" stroke="${TITLE}" stroke-width="2.5"/><circle r="7" fill="none" stroke="${TITLE}" stroke-width="2"/><path d="M0,0 L11,-11" stroke="${TITLE}" stroke-width="2.5" stroke-linecap="round"/></g>` + text(cx, cy + 22, CATEGORY_LABEL[p.category] || p.category, { size: 13 });
-    case "use": return `<path d="M${cx - 12},${cy - 18} h24 v20 h-24 z M${cx - 12},${cy - 10} h24" fill="none" stroke="${TITLE}" stroke-width="2.5" stroke-linejoin="round"/>` + text(cx, cy + 20, fit(p.item || "?", 15), { size: 12 });
+    case "scan": return `<g transform="translate(${cx},${cy - 10})"><circle r="15" fill="none" stroke="${TITLE}" stroke-width="2.5"/><circle r="7" fill="none" stroke="${TITLE}" stroke-width="2"/><path d="M0,0 L11,-11" stroke="${TITLE}" stroke-width="2.5" stroke-linecap="round"/></g>` + fitText(cx, cy + 22, L.cat(p.category), w - 10, { size: 13 });
+    case "use": return `<path d="M${cx - 12},${cy - 18} h24 v20 h-24 z M${cx - 12},${cy - 10} h24" fill="none" stroke="${TITLE}" stroke-width="2.5" stroke-linejoin="round"/>` + itemText(cx - 10, cy + 20, p.item ? L.item(p.item) : "?", w - 38);   // left of the output pills
     case "inv": {
-      const from = p.positive ? "bot" : p.target, to = p.positive ? p.target : "bot";
-      return text(cx, cy - 18, from, { size: 15 }) + text(cx, cy, "↓", { size: 15 }) + text(cx, cy + 18, to, { size: 15 });
+      const from = p.positive ? L.bot() : L.target(p.target), to = p.positive ? L.target(p.target) : L.bot();
+      return fitText(cx, cy - 18, from, w - 10, { size: 15 }) + text(cx, cy, "↓", { size: 15 }) + fitText(cx, cy + 18, to, w - 10, { size: 15 });
     }
     case "call": return text(cx, cy - 12, "▶▶", { size: 16 }) + text(cx, cy + 8, fit(p.program || "?", 14), { size: 14 }) +
       (p.args && p.args.length ? text(cx, cy + 26, fit(`(${p.args.map(fmtOperand).join(", ")})`, 16), { size: 11, fill: V_COL }) : "");
@@ -186,7 +214,7 @@ function portGlyph(key, lx, ly, col, active) {
 }
 
 function nodeSvg(n, index, o) {
-  const t = T[n.t], [w, h] = sizePx(n), small = tiny(n);
+  const t = T[n.t], [w, h] = sizePx(n), small = tiny(n), L = o.labels;
   const fg = t.fg || TITLE;
   let g = `<g data-node="${n.id}" transform="translate(${n.x * U},${n.y * U})"${o.interactive ? ` style="cursor:move"` : ""}>`;
   if (o.current === n.id) g += `<rect x="-7" y="-7" width="${w + 14}" height="${h + 14}" fill="none" stroke="#3fbf5f" stroke-width="4" rx="4"/>`;
@@ -197,10 +225,11 @@ function nodeSvg(n, index, o) {
   if (!small) g += `<rect width="${w}" height="${HDR}" fill="${t.bg}"/>`;
   g += `<rect x="1" y="1" width="${w - 2}" height="${h - 2}" fill="none" stroke="${edgeCol}" stroke-width="2"/>`;
   if (!small) {
-    g += text(7, HDR / 2 + 1, t.label, { size: 16, fill: fg, anchor: "start" });
+    const room = w - 13 - (o.showIndex ? String(index).length * 6.6 + 6 : 0);
+    g += fitText(7, HDR / 2 + 1, L.node(n.t), room, { size: 16, min: 11, fill: fg, anchor: "start" });
     if (o.showIndex) g += text(w - 6, HDR / 2 + 1, String(index), { size: 11, fill: fg, anchor: "end", opacity: ".55" });
   } else if (o.showIndex) g += text(w / 2, -8, String(index), { size: 11, fill: TITLE, opacity: ".6" });
-  g += nodeBody(n, w, h);
+  g += nodeBody(n, w, h, L);
   if (n.t !== "start") {
     const iy = inPos(n)[1] - n.y * U, has = o.linked.has(n.id);
     g += `<circle cx="0" cy="${iy}" r="7" fill="${has ? "#fff" : "#2a2f45"}" stroke="${has ? "#fff" : "#6b7088"}" stroke-width="1.5"/>`;
@@ -210,7 +239,7 @@ function nodeSvg(n, index, o) {
     const lx = px - n.x * U, ly = py - n.y * U;
     const act = o.activePort && o.activePort.id === n.id && o.activePort.i === i;
     const pg = portGlyph(key, lx, ly, col, act);
-    g += `<g class="port" data-port="${n.id}:${i}"${o.interactive ? ` style="cursor:crosshair"` : ""}><title>${esc(label)}</title>${pg.svg}`;
+    g += `<g class="port" data-port="${n.id}:${i}"${o.interactive ? ` style="cursor:crosshair"` : ""}><title>${esc(L.outTip(n.t, key, label))}</title>${pg.svg}`;
     if (tid == null && n.t !== "start") g += `<text x="${pg.ex}" y="${ly + 0.5}" font-size="11" font-weight="600" fill="${col}" dominant-baseline="central">END</text>`;
     g += `</g>`;
   });
@@ -224,7 +253,7 @@ export function arrowDefs(prefix = "") {
     d += `<marker id="${prefix}ah-${k}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1,1L8,5L1,9" fill="none" stroke="${c}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></marker>`;
   return d;
 }
-// o: {routes, sel, selEdge, current, hl, activePort, showIndex, interactive, prefix}
+// o: {routes, sel, selEdge, current, hl, activePort, showIndex, interactive, prefix, labels}
 export function graphSvg(prog, o = {}) {
   const prefix = o.prefix || "";
   const byId = new Map(prog.nodes.map(n => [n.id, n]));
@@ -241,7 +270,8 @@ export function graphSvg(prog, o = {}) {
     edges += `<path d="${d}" fill="none" stroke="${col}" stroke-width="${isSel ? 4 : 2.6}" stroke-opacity="${isSel ? 1 : 0.9}" marker-end="url(#${prefix}ah-${colKey(col)})"/>`;
     if (o.interactive) hits += `<path data-edge="${a.id}:${i}" d="${d}" fill="none" stroke="transparent" stroke-width="12" style="cursor:pointer"/>`;
   });
-  const nodes = prog.nodes.map(n => nodeSvg(n, index.get(n.id), { ...o, linked })).join("");
+  const labels = { ...EN_LABELS, ...(o.labels || {}) };
+  const nodes = prog.nodes.map(n => nodeSvg(n, index.get(n.id), { ...o, linked, labels })).join("");
   return { defs: arrowDefs(prefix), body: edges + hits + nodes };
 }
 export function graphBounds(prog, routes) {
@@ -256,7 +286,7 @@ export function graphBounds(prog, routes) {
 }
 // standalone SVG document for export
 export function exportSvg(prog, o = {}) {
-  const { defs, body } = graphSvg(prog, { routes: o.routes, showIndex: o.showIndex !== false, prefix: "x" });
+  const { defs, body } = graphSvg(prog, { routes: o.routes, showIndex: o.showIndex !== false, prefix: "x", labels: o.labels });
   const b = graphBounds(prog, o.routes), pad = 60, head = o.title ? 56 : 0;
   // loops routed around the graph can leave the node box; leave room for them
   const W = Math.ceil(b.w + 2 * pad), H = Math.ceil(b.h + 2 * pad + head);

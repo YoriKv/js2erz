@@ -32,3 +32,5 @@
 .wp .wp-vars { display: flex; flex-wrap: wrap; gap: 2px 12px; font-family: ui-monospace, Menlo, Consolas, monospace; }
 .wp .wp-vars i { font-style: normal; color: var(--wp-accent); }
 .wp .wp-log { font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--wp-muted); }
+.wp .wp-cv.alt { cursor: copy; }
+.wp .wp-hint { padding: 3px 8px; font-size: 12px; border-top: 1px solid var(--wp-line); min-height: 1.4em; }

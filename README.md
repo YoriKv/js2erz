@@ -18,7 +18,7 @@ unload(Target.Storage);
   returns is the output the node took, so `if`, `while` and `switch` route the arrows.
 - `let` variables, arithmetic and comparisons become VALUE, OPER, COMP and EQ nodes. Functions are inlined; a function
   that starts with `"use program";` becomes its own program, called with a CALL node.
-- Export the graph as PNG or SVG, copy the numbered build list, or export JSON for the
+- Export the graph as PNG or SVG, or export JSON for the
   [erzstat.site](https://erzstat.site/programs/) editor.
 - Check the program in the built-in simulator before you build it.
 
