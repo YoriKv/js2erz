@@ -169,7 +169,7 @@ test("makeWorld is deterministic per seed", () => {
 
 // ---------------------------------------------------------------- seismic initiator
 import { stampInitiator, initiatorAt, minedShare, SEISMIC_DEFAULTS } from "../src/sim.js";
-// the seismic example's world: 128x96, an initiator on the bot's start, no impactite inside the disc
+// a 128x96 world with an initiator on the bot's start, no impactite inside the disc
 function seismicWorld(seed) {
   const w = makeWorld(128, 96, seed);
   stampInitiator(w, w.bot.x, w.bot.y);
@@ -362,18 +362,6 @@ test("seismic: an initiator placed on the bot's start", () => {
   assert.deepEqual(a.initiators, [{ x: 64, y: 48 }]);
   assert.equal(initiatorAt(a, a.bot.x, a.bot.y), 0, "bot on the footprint");
   assert.ok(minedShare(a, a.initiators[0]) < 0.3);
-});
-
-test("seismic example: digs the disc, leaves the radius and survives the break", async () => {
-  const { compile } = await import("../src/compiler.js");
-  const { EXAMPLES } = await import("../src/examples.js");
-  const r = compile(EXAMPLES.find(e => e.id === "seismic").code);
-  const s = createSim({ programs: new Map(r.programs.map(p => [p.name, p])), main: r.programs[0].name, world: seismicWorld(2) });
-  // the field takes about 100k nodes to dig to 80%, then the initiator works 603k nodes before it breaks
-  for (let n = 0; n < 1000000 && s.status === "run" && !s.log.some(l => l.includes("over:")); n += 10000) s.run(10000);
-  assert.ok(s.log.some(l => l.includes("started working")), "the lanes started the initiator");
-  assert.ok(s.log.some(l => l.includes("over:")), "a break has happened");
-  assert.equal(s.status, "run"); assert.equal(s.dead, null);
 });
 
 test("seismic: driving into the radius during the break is deadly too", () => {

@@ -75,7 +75,7 @@ const EN = {
   "imp.note": "The program opens in its own tab. It is not linked to the code; it is there to view, tidy, simulate and export.",
   "imp.ph": "— an erzstat.site export, or any JSON that contains one", "imp.name": "name (optional)",
   "imp.relayout": "lay out again", "imp.go": "Import",
-  "ex.tour": "Tour: the basics", "ex.digForward": "Dig forward", "ex.road": "Follow a road", "ex.line": "Line of length len",
+  "ex.basic": "Basic", "ex.road": "Follow a road", "ex.line": "Line of length len",
   "ex.spiral": "45° spiral", "ex.ore": "Selective ore miner", "ex.sub": "Subprograms (CALL / EXIT)", "ex.wall": "Wall follower",
   "exp.sub": "{0} · needs {1} · js2erz",
   // directions, aim, inventory
@@ -120,7 +120,6 @@ const EN = {
   "log.seisBreak": "Seismic break at ({0}, {1}), radius {2}", "log.seisHand": "Seismic break at ({0}, {1}), radius {2} (by hand)",
   "log.seisOver": "Seismic break at ({0}, {1}) over: {2} cells refilled",
   "log.crushed": "bot crushed by the seismic break at ({0}, {1}), {2} cells from the centre",
-  "ex.seismic": "Seismic: mine, then leave the radius",
   "exit.success": "SUCCESS", "exit.fail": "FAIL", "abs": "abs", "rel": "rel",
 };
 // English text taken from the game client (descriptions shown in its Programmator editor)
@@ -321,7 +320,7 @@ const OWN_RU = {
   "imp.note": "Программа откроется в отдельной вкладке. Она не связана с кодом: её можно смотреть, упорядочивать, запускать в симуляторе и экспортировать.",
   "imp.ph": "— экспорт с erzstat.site или любой JSON, в котором он есть", "imp.name": "имя (необязательно)",
   "imp.relayout": "разложить заново", "imp.go": "Импортировать",
-  "ex.tour": "Обзор: основы", "ex.digForward": "Копать вперёд", "ex.road": "Ехать по дороге", "ex.line": "Линия длины len",
+  "ex.basic": "Основы", "ex.road": "Ехать по дороге", "ex.line": "Линия длины len",
   "ex.spiral": "Спираль 45°", "ex.ore": "Выборочная добыча руды", "ex.sub": "Подпрограммы (ВЫЗОВ / ВЫХОД)", "ex.wall": "Вдоль стены",
   "exp.sub": "{0} · требуется: {1} · js2erz",
   "dir.1": "юго-восток", "dir.3": "юго-запад", "dir.5": "северо-запад", "dir.7": "северо-восток",
@@ -358,7 +357,6 @@ const OWN_RU = {
   "log.seisBreak": "Откол пласта в ({0}, {1}), радиус {2}", "log.seisHand": "Откол пласта в ({0}, {1}), радиус {2} (вручную)",
   "log.seisOver": "Откол пласта в ({0}, {1}) завершён, восстановлено клеток: {2}",
   "log.crushed": "бот раздавлен отколом пласта в ({0}, {1}), на расстоянии {2} от центра",
-  "ex.seismic": "Сейсмика: копать, потом уйти из радиуса",
 };
 
 // ---------------------------------------------------------------- Ukrainian (all ours: the client has no Ukrainian)
@@ -428,7 +426,7 @@ const UK = {
   "imp.note": "Програма відкриється в окремій вкладці. Вона не пов'язана з кодом: її можна переглядати, впорядковувати, запускати в симуляторі й експортувати.",
   "imp.ph": "— експорт з erzstat.site або будь-який JSON, що його містить", "imp.name": "назва (необов'язково)",
   "imp.relayout": "розкласти заново", "imp.go": "Імпортувати",
-  "ex.tour": "Огляд: основи", "ex.digForward": "Копати вперед", "ex.road": "Їхати дорогою", "ex.line": "Лінія довжини len",
+  "ex.basic": "Основи", "ex.road": "Їхати дорогою", "ex.line": "Лінія довжини len",
   "ex.spiral": "Спіраль 45°", "ex.ore": "Вибірковий видобуток руди", "ex.sub": "Підпрограми (ВИКЛИК / ВИХІД)", "ex.wall": "Уздовж стіни",
   "exp.sub": "{0} · потрібно: {1} · js2erz",
   "node.start": "СТАРТ", "node.rotA": "ОБЕРТ АБС", "node.rotR": "ОБЕРТ ВІДН", "node.move": "КРОК", "node.dig": "КОПА",
@@ -537,7 +535,6 @@ const UK = {
   "log.seisBreak": "Відкол пласта в ({0}, {1}), радіус {2}", "log.seisHand": "Відкол пласта в ({0}, {1}), радіус {2} (вручну)",
   "log.seisOver": "Відкол пласта в ({0}, {1}) завершено, відновлено клітинок: {2}",
   "log.crushed": "бота розчавлено відколом пласта в ({0}, {1}), на відстані {2} від центру",
-  "ex.seismic": "Сейсміка: копати, потім піти з радіуса",
 };
 
 // built-in function descriptions for the Reference tab, keyed by the call column of compiler.js BUILTIN_DOCS
