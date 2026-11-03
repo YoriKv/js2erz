@@ -34,3 +34,8 @@
 .wp .wp-log { font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--wp-muted); }
 .wp .wp-cv.alt { cursor: copy; }
 .wp .wp-hint { padding: 3px 8px; font-size: 12px; border-top: 1px solid var(--wp-line); min-height: 1.4em; }
+.wp .wp-row[hidden] { display: none; }
+.wp .wp-seis { gap: 4px 10px; }
+.wp .wp-sw-init { outline: 1px solid #8fd3e6; outline-offset: -3px; }
+.wp .wp-seisl.working b { color: #e3b53c; }
+.wp .wp-seisl.breaking b { color: var(--wp-bad); }

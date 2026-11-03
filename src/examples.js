@@ -121,4 +121,54 @@ while (true) {
 }
 `,
   },
+  {
+    id: "seismic", title: "Seismic: mine, then leave the radius",
+    code: `// Seismic hazard: when the rock around a seismic initiator is about 80% mined out, the initiator starts working,
+// and about 10 minutes later it breaks the layer: the rock grows back and bots within 40 cells are crushed.
+// Programs cannot see buildings, so the break centre is a constant here: (65, 49) in the simulator's Seismic
+// scenario (128×96, any seed; pick it in the Simulator tab). Each round digs lanes over the whole disc, which
+// starts the initiator, then drives out of the radius and waits for the break before it digs the new rock.
+"use program SeismicLanes";
+
+const CX = 65, CY = 49;         // break centre
+const SAFE = 45;                // wait this far from it (the break radius is 40)
+const LANES = 26;               // north-south lanes over the disc, each one 3 cells further west
+const WAIT = 220000;            // rounds of the wait loop: ~660 s at 1000 nodes per game second (3 nodes a round)
+
+function go() {                 // one cell on, digging the way
+  while (moveDig() === "dug");
+}
+function ahead() {              // the same, or 3 cells to the side (left, else right) if the rock can't be dug
+  if (moveDig() === "fail") {
+    turnLeft();
+    if (moveDig() === "fail") turnAround();
+    go(); go(); go();
+  }
+}
+function goTo(tx, ty) {         // x first, then y
+  while (x !== tx) { rotateTo(x < tx ? Dir.E : Dir.W); ahead(); }
+  while (y !== ty) { rotateTo(y < ty ? Dir.S : Dir.N); ahead(); }
+}
+function far() {                // outside the break radius, with some margin?
+  let dx = x - CX, dy = y - CY;
+  return dx * dx + dy * dy > SAFE * SAFE;
+}
+
+while (true) {
+  // 1. dig the field: lanes from the east edge of the disc to the west edge
+  for (let lane = 0; lane < LANES; lane++) {
+    let ty = CY - 35;
+    if (lane % 2 === 1) ty = CY + 35;
+    goTo(CX + 38 - 3 * lane, ty);
+  }
+  // 2. leave the radius, away from the centre
+  while (!far()) {
+    rotateTo(x < CX ? Dir.W : Dir.E);
+    ahead();
+  }
+  // 3. wait until the break has passed
+  for (let k = 0; k < WAIT; k++) pass();
+}
+`,
+  },
 ];

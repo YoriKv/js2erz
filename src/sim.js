@@ -83,9 +83,8 @@ function fractal(n, x, y, oct = 3) {
   return sum / norm;
 }
 
-export function makeWorld(W = 96, H = 72, seed) {
-  seed = seed == null || !isFinite(seed) ? Math.floor(Math.random() * 1e6) : Math.floor(seed);
-  const rnd = mulberry32(seed);
+// seeded rock layers, ore pockets, ice and caves (shared by the world presets)
+function terrain(W, H, rnd) {
   const nBase = valueNoise(rnd), nLayer = valueNoise(rnd), nOre = valueNoise(rnd), nIce = valueNoise(rnd),
     nCave = valueNoise(rnd), nHard = valueNoise(rnd);
   const cells = new Array(W * H);
@@ -106,6 +105,24 @@ export function makeWorld(W = 96, H = 72, seed) {
     if (x === 0 || y === 0 || x === W - 1 || y === H - 1) c = "TectonicMass";
     cells[y * W + x] = c;
   }
+  return cells;
+}
+const toSeed = seed => (seed == null || !isFinite(seed) ? Math.floor(Math.random() * 1e6) : Math.floor(seed));
+// open 3x3 for the bot body, no hard rock within 4 cells
+function clearPocket(w, bx, by) {
+  const { W, H, cells } = w;
+  for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) {
+    const X = bx + dx, Y = by + dy;
+    if (X <= 0 || Y <= 0 || X >= W - 1 || Y >= H - 1) continue;
+    const i = Y * W + X;
+    if (Math.abs(dx) <= 1 && Math.abs(dy) <= 1) cells[i] = "Back";
+    else if (cells[i] === "SinterCrust" || cells[i] === "MetallicCrust") cells[i] = "Regolith";
+  }
+}
+
+export function makeWorld(W = 96, H = 72, seed) {
+  seed = toSeed(seed);
+  const cells = terrain(W, H, mulberry32(seed));
   const bot = { x: W >> 1, y: H >> 1 };
   const set = (x, y, c) => { if (x > 0 && y > 0 && x < W - 1 && y < H - 1) cells[y * W + x] = c; };
   // a road ring west of the bot, so road-following programs work at once
@@ -114,15 +131,22 @@ export function makeWorld(W = 96, H = 72, seed) {
     const x = Math.round(rcx + R * Math.cos(a * Math.PI / 180)), y = Math.round(rcy + R * Math.sin(a * Math.PI / 180));
     for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) set(x + dx, y + dy, "Road");
   }
-  // open pocket around the bot; no hard rock right next to it
-  for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) {
-    const X = bot.x + dx, Y = bot.y + dy;
-    if (X <= 0 || Y <= 0 || X >= W - 1 || Y >= H - 1) continue;
-    const i = Y * W + X;
-    if (Math.abs(dx) <= 1 && Math.abs(dy) <= 1) cells[i] = "Back";
-    else if (cells[i] === "SinterCrust" || cells[i] === "MetallicCrust") cells[i] = "Regolith";
-  }
-  return { W, H, seed, cells, bot };
+  const w = { W, H, seed, cells, bot };
+  clearPocket(w, bot.x, bot.y);
+  return w;
+}
+// "Seismic" preset: the same rock with a seismic initiator in the middle and the bot inside its break radius.
+// Undiggable crust inside the radius becomes sinter crust (hard but diggable), so the disc can be mined out.
+export function makeSeismicWorld(W = 128, H = 96, seed) {
+  seed = toSeed(seed);
+  const cells = terrain(W, H, mulberry32(seed));
+  const ix = W >> 1, iy = H >> 1;
+  const bot = { x: Math.min(W - 6, ix + 20), y: iy };
+  const w = { W, H, seed, cells, bot, initiators: [] };
+  stampInitiator(w, ix, iy, 3);
+  discCells(w, w.initiators[0], SEISMIC_DEFAULTS, (x, y) => { if (cells[y * W + x] === "MetallicCrust") cells[y * W + x] = "SinterCrust"; });
+  clearPocket(w, bot.x, bot.y);
+  return w;
 }
 export function emptyWorld(W, H) {
   const cells = new Array(W * H).fill("Back");
@@ -131,12 +155,80 @@ export function emptyWorld(W, H) {
 }
 export const cellAt = (w, x, y) => (x < 0 || y < 0 || x >= w.W || y >= w.H) ? "TectonicMass" : w.cells[y * w.W + x];
 
+// ---------------------------------------------------------------- seismic initiator
+// In the game a seismic initiator is a 5x5 building that regrows the rock around it. When the ground within its
+// break radius is about 80% mined out it starts working (one drill used), and about ten minutes later it breaks the
+// layer: open cells in the radius fill up with rock again, from the rim inwards, over about ten seconds, and bots in
+// the radius are crushed.
+//
+// Model used here (the values marked unverified are guesses and can be changed through createSim's `seismic`):
+// - World: `world.initiators = [{ x, y, drills }]`, (x, y) = centre cell of the 5x5 footprint. The footprint cells are
+//   open ground: a bot can stand and drive on them, there is nothing to dig, and SCAN sees the ground, not the
+//   building (programs cannot see buildings in the game). Blocks and roads cannot be placed on a footprint.
+// - Break centre: the footprint centre + `offset` (the game reports it one cell right of and below the centre).
+// - Mined share over the disc (distance <= radius, footprints left out): open cells / (open cells + diggable rock).
+//   Open = Back or Empty. Roads, blocks and walls count as neither; undiggable rock (MetallicCrust) counts as rock
+//   only with `countUndiggable` (unverified either way).
+// - Time: the simulator counts nodes. One game second = `nodesPerSec` nodes (default 1000, a rough node rate), so the
+//   working period of `workSec` 603 s and the break of `breakSec` 10 s become node counts.
+// - Regrowth: every open cell in the disc refills up to `radius - fade` from the centre, fewer and fewer towards the
+//   rim (none at the radius). Footprints, roads and cells under a living bot do not refill. A cell takes the rock of a
+//   random cell of its 3x3 neighbourhood as it was before it was dug (so dug ore tends to come back as ore). Where no
+//   rock is known (cells that were open from the start), the rock comes from `mix` (about 15% ore; unverified).
+// - Death: with `deathMode` "break" a bot dies when it is within the radius at any node of the break, its start
+//   included (the cautious reading); with "wave" it dies when the regrowth front reaches it (unverified; one bot died
+//   about 2 s after a break, 34 cells from the centre). `safeOnFootprint`: a bot whose centre is on a footprint
+//   survives (unverified). Distances are from the bot's centre cell.
+export const SEISMIC_DEFAULTS = {
+  nodesPerSec: 1000, workSec: 603, breakSec: 10, radius: 40, fade: 6, threshold: 0.8, offset: [1, 1],
+  safeOnFootprint: false, deathMode: "break", countUndiggable: false, seed: undefined,
+  mix: [["Regolith", 45], ["Chondrite", 25], ["Breccia", 15], ["SilicateRock", 5], ["SulfideRock", 5], ["DenseOre", 3], ["PhosphateRock", 2]],
+};
+export const FOOT = 2;   // footprint half size (5x5)
+const NATURAL = new Set(CATEGORY_CELLS.Bombable.filter(c => c !== "Road"));   // natural rock
+const OPEN = new Set(["Back", "Empty"]);
+const onFootOf = (o, x, y) => Math.abs(x - o.x) <= FOOT && Math.abs(y - o.y) <= FOOT;
+// index of the initiator whose footprint covers (x, y), or -1
+export const initiatorAt = (w, x, y) => (w.initiators || []).findIndex(o => onFootOf(o, x, y));
+// place an initiator centred on (x, y): the footprint must lie inside the border and keep a 1-cell gap to other
+// buildings (as the game's placement rule). Clears the footprint to open ground (roads stay). Returns success.
+export function stampInitiator(w, x, y, drills = 3) {
+  if (x - FOOT < 1 || y - FOOT < 1 || x + FOOT > w.W - 2 || y + FOOT > w.H - 2) return false;
+  const list = w.initiators || (w.initiators = []);
+  if (list.some(o => Math.abs(o.x - x) <= 2 * FOOT + 1 && Math.abs(o.y - y) <= 2 * FOOT + 1)) return false;
+  for (let dy = -FOOT; dy <= FOOT; dy++) for (let dx = -FOOT; dx <= FOOT; dx++) {
+    const i = (y + dy) * w.W + x + dx;
+    if (w.cells[i] !== "Road") w.cells[i] = "Back";
+  }
+  list.push({ x, y, drills });
+  return true;
+}
+export const breakCentre = (o, cfg = SEISMIC_DEFAULTS) => [o.x + cfg.offset[0], o.y + cfg.offset[1]];
+// classify a cell for the mined share: 1 open, 2 rock, 0 neither
+const shareClass = (c, cfg) => OPEN.has(c) ? 1 : NATURAL.has(c) && (cfg.countUndiggable || isDiggable(c)) ? 2 : 0;
+function discCells(w, o, cfg, fn) {
+  const [cx, cy] = breakCentre(o, cfg), R = cfg.radius, R2 = R * R, list = w.initiators || [];
+  for (let y = Math.max(0, Math.ceil(cy - R)); y <= Math.min(w.H - 1, Math.floor(cy + R)); y++)
+    for (let x = Math.max(0, Math.ceil(cx - R)); x <= Math.min(w.W - 1, Math.floor(cx + R)); x++) {
+      const d2 = (x - cx) * (x - cx) + (y - cy) * (y - cy);
+      if (d2 <= R2 && !list.some(q => onFootOf(q, x, y))) fn(x, y, d2);
+    }
+}
+// mined share of an initiator's disc in a world (for display outside a run)
+export function minedShare(w, o, cfg = SEISMIC_DEFAULTS) {
+  cfg = { ...SEISMIC_DEFAULTS, ...cfg };
+  let open = 0, rock = 0;
+  discCells(w, o, cfg, (x, y) => { const k = shareClass(w.cells[y * w.W + x], cfg); if (k === 1) open++; else if (k === 2) rock++; });
+  return open + rock ? open / (open + rock) : 0;
+}
+
 // ---------------------------------------------------------------- interpreter
 export const STACK_LIMIT = 32;
 const num = v => ({ t: "n", v });
 export function fmtValue(v) { return v == null ? "—" : v.t === "n" ? fmtNum(v.v) : v.v; }
 
-export function createSim({ programs, main, world, dir = 0, items = { RoadSector: 20, Block: 20, MiningCharge: 5 }, params = {} }) {
+// `seismic`: overrides of SEISMIC_DEFAULTS; used only when the world has initiators
+export function createSim({ programs, main, world, dir = 0, items = { RoadSector: 20, Block: 20, MiningCharge: 5 }, params = {}, seismic = {} }) {
   const index = new Map();   // program name -> Map(node id -> node)
   for (const [name, p] of programs) index.set(name, new Map(p.nodes.map(n => [n.id, n])));
   const w = { W: world.W, H: world.H, seed: world.seed, cells: world.cells.slice(), bot: { ...world.bot } };
@@ -146,8 +238,12 @@ export function createSim({ programs, main, world, dir = 0, items = { RoadSector
     items: { ...items }, autos: { auto_attack_miners: 1, auto_attack_mobs: 1, auto_war: 1 }, last: null,
   };
   S.trail.add(S.bot.x + "," + S.bot.y);
+  let seis = null;   // seismic initiators (see below); null when the world has none
   const log = s => { S.log.push(s); if (S.log.length > 200) S.log.shift(); };
-  const done = (result, why) => { S.status = "done"; S.result = result; log(`Program finished (${result}): ${why}`); };
+  const done = (result, why) => {
+    S.status = "done"; S.result = result; log(`Program finished (${result}): ${why}`);
+    if (seis) seis.settle();
+  };
 
   const startOf = prog => prog.nodes.find(n => n.t === "start") || prog.nodes[0];
   function pushFrame(name, vars) {
@@ -170,7 +266,11 @@ export function createSim({ programs, main, world, dir = 0, items = { RoadSector
 
   // --- world access
   const inside = (x, y) => x >= 0 && y >= 0 && x < w.W && y < w.H;
-  const setCell = (x, y, c) => { w.cells[y * w.W + x] = c; S.dmg.delete(y * w.W + x); };
+  const setCell = (x, y, c) => {
+    const i = y * w.W + x;
+    if (seis) seis.change(x, y, w.cells[i], c);
+    w.cells[i] = c; S.dmg.delete(i);
+  };
   const botCovers = (x, y) => Math.abs(x - S.bot.x) <= 1 && Math.abs(y - S.bot.y) <= 1;
   function aimWorld() {
     const a = S.aim, b = S.bot;
@@ -203,8 +303,8 @@ export function createSim({ programs, main, world, dir = 0, items = { RoadSector
     return 2;
   }
   const ITEM_FX = {
-    RoadSector(x, y) { const c = cellAt(w, x, y); if (!inside(x, y) || !isWalkable(c) || c === "Road" || c === "FedRoad") return false; setCell(x, y, "Road"); return true; },
-    Block(x, y) { if (!inside(x, y) || !isWalkable(cellAt(w, x, y)) || botCovers(x, y)) return false; setCell(x, y, "BlockSimple"); return true; },
+    RoadSector(x, y) { const c = cellAt(w, x, y); if (!inside(x, y) || (seis && seis.onFoot(x, y)) || !isWalkable(c) || c === "Road" || c === "FedRoad") return false; setCell(x, y, "Road"); return true; },
+    Block(x, y) { if (!inside(x, y) || !isWalkable(cellAt(w, x, y)) || botCovers(x, y) || (seis && seis.onFoot(x, y))) return false; setCell(x, y, "BlockSimple"); return true; },
     MiningCharge(x, y) {
       const bombable = new Set(CATEGORY_CELLS.Bombable);
       for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
@@ -339,6 +439,10 @@ export function createSim({ programs, main, world, dir = 0, items = { RoadSector
   };
   S.step = () => {
     if (S.status !== "run") return;
+    runNode();
+    if (seis && S.status === "run") seis.tick();
+  };
+  function runNode() {
     const fr = S.frames[S.frames.length - 1];
     const n = index.get(fr.program).get(fr.node);
     if (!n) return finishFrame("fail", `node ${fr.node} not found in "${fr.program}"`);
@@ -359,8 +463,131 @@ export function createSim({ programs, main, world, dir = 0, items = { RoadSector
       pushFrame(name, vars);
       log(`CALL "${name}"`);
     }
-  };
+  }
   S.run = (k) => { while (k-- > 0 && S.status === "run") S.step(); };
   S.stop = () => { if (S.status === "run") done("success", "stopped"); };
+
+  // --- seismic initiators (model: see SEISMIC_DEFAULTS above)
+  S.seismic = null;
+  S.dead = null;
+  if (world.initiators && world.initiators.length) {
+    const cfg = { ...SEISMIC_DEFAULTS, ...seismic }, R = cfg.radius;
+    const workNodes = Math.max(1, Math.round(cfg.workSec * cfg.nodesPerSec));
+    const breakNodes = Math.max(1, Math.round(cfg.breakSec * cfg.nodesPerSec));
+    const rand = mulberry32(cfg.seed ?? ((w.seed ?? 0) * 7919 + 17));
+    w.initiators = world.initiators.map(o => ({ x: o.x, y: o.y, drills: o.drills ?? 0 }));
+    const list = w.initiators.map(o => {
+      const [cx, cy] = breakCentre(o, cfg);
+      const it = { x: o.x, y: o.y, cx, cy, drills: o.drills, state: "idle", left: 0, open: 0, rock: 0, refilled: 0, plan: null, k: 0, elapsed: 0 };
+      Object.defineProperty(it, "share", { enumerable: true, get() { return it.open + it.rock ? it.open / (it.open + it.rock) : 0; } });
+      discCells(w, o, cfg, (x, y) => { const k = shareClass(w.cells[y * w.W + x], cfg); if (k === 1) it.open++; else if (k === 2) it.rock++; });
+      return it;
+    });
+    // rock layer under open cells: what each cell was before it was dug ("Back" = not known)
+    const back = w.cells.map(c => NATURAL.has(c) ? c : "Back");
+    const onFoot = (x, y) => list.some(o => onFootOf(o, x, y));
+    const inDisc = (o, x, y) => (x - o.cx) * (x - o.cx) + (y - o.cy) * (y - o.cy) <= R * R;
+    const dist = (o, x, y) => Math.hypot(x - o.cx, y - o.cy);
+    const fromMix = () => {
+      const total = cfg.mix.reduce((a, [, p]) => a + p, 0);
+      let r = rand() * total;
+      for (const [c, p] of cfg.mix) if ((r -= p) < 0) return c;
+      return cfg.mix[cfg.mix.length - 1][0];
+    };
+    function regrowRock(x, y) {
+      const pick = (X, Y) => (X >= 0 && Y >= 0 && X < w.W && Y < w.H && !onFoot(X, Y) ? back[Y * w.W + X] : "Back");
+      const k = Math.floor(rand() * 9), first = pick(x + (k % 3) - 1, y + Math.floor(k / 3) - 1);
+      if (NATURAL.has(first)) return first;
+      const known = [];
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const b = pick(x + dx, y + dy); if (NATURAL.has(b)) known.push(b); }
+      return known.length ? known[Math.floor(rand() * known.length)] : fromMix();
+    }
+    function die(o) {
+      const d = dist(o, S.bot.x, S.bot.y);
+      S.dead = { x: S.bot.x, y: S.bot.y, dist: d, step: S.steps };
+      done("fail", `bot crushed by the seismic break at (${o.cx}, ${o.cy}), ${fmtNum(Math.round(d * 10) / 10)} cells from the centre`);
+    }
+    // the bot dies within the radius while the layer breaks (in "wave" mode: once the front has passed it)
+    function checkDeath(o, front) {
+      if (S.dead || S.status !== "run") return;
+      const d = dist(o, S.bot.x, S.bot.y);
+      if (d > R || d < front) return;
+      if (cfg.safeOnFootprint && onFoot(S.bot.x, S.bot.y)) return;
+      die(o);
+    }
+    function refill(o, upTo) {
+      while (o.k < o.plan.length && o.plan[o.k].d >= upTo) {
+        const { x, y } = o.plan[o.k++];
+        if (!OPEN.has(w.cells[y * w.W + x]) || (!S.dead && botCovers(x, y))) continue;
+        setCell(x, y, regrowRock(x, y));
+        o.refilled++;
+      }
+    }
+    function startBreak(o, manual) {
+      o.state = "breaking"; o.left = breakNodes; o.elapsed = 0; o.refilled = 0; o.k = 0;
+      // the cells that will refill, from the rim inwards
+      const plan = [], edge = R - cfg.fade;
+      discCells(w, o, cfg, (x, y, d2) => {
+        const i = y * w.W + x;
+        if (!OPEN.has(w.cells[i])) return;
+        const d = Math.sqrt(d2);
+        if (d > edge && rand() >= (R - d) / cfg.fade) return;
+        plan.push({ x, y, d });
+      });
+      plan.sort((a, b) => b.d - a.d);
+      o.plan = plan;
+      log(`Seismic break at (${o.cx}, ${o.cy}), radius ${R}${manual ? " (by hand)" : ""}`);
+      checkDeath(o, cfg.deathMode === "wave" ? R : 0);
+    }
+    function settleOne(o) {
+      refill(o, -1);
+      o.state = "idle"; o.left = 0; o.plan = null;
+      log(`Seismic break at (${o.cx}, ${o.cy}) over: ${o.refilled} cells refilled`);
+    }
+    seis = {
+      onFoot,
+      change(x, y, old, c) {
+        const i = y * w.W + x;
+        if (NATURAL.has(old) && !NATURAL.has(c)) back[i] = old;
+        if (onFoot(x, y)) return;
+        for (const o of list) if (inDisc(o, x, y)) {
+          const a = shareClass(old, cfg), b = shareClass(c, cfg);
+          if (a === 1) o.open--; else if (a === 2) o.rock--;
+          if (b === 1) o.open++; else if (b === 2) o.rock++;
+        }
+      },
+      tick() {
+        for (const o of list) {
+          if (S.status !== "run") return;
+          if (o.state === "idle") {
+            if (o.drills > 0 && o.share >= cfg.threshold) {
+              o.state = "working"; o.drills--; o.left = workNodes;
+              log(`Seismic initiator at (${o.x}, ${o.y}) started working: break in ${workNodes} nodes, ${o.drills} drills left`);
+            }
+          } else if (o.state === "working") {
+            if (--o.left <= 0) startBreak(o, false);
+          } else if (o.state === "breaking") {
+            o.elapsed++; o.left = breakNodes - o.elapsed;
+            const front = R * (1 - o.elapsed / breakNodes);
+            refill(o, front);
+            checkDeath(o, cfg.deathMode === "wave" ? front : 0);
+            if (S.status === "run" && o.elapsed >= breakNodes) settleOne(o);
+          }
+        }
+      },
+      // the run is over: finish running breaks at once so the world shows their result
+      settle() { for (const o of list) if (o.state === "breaking") settleOne(o); },
+    };
+    S.seismic = { cfg, workNodes, breakNodes, list };
+    // start a break now (the initiator nearest to the bot by default), without using a drill. Outside a run the
+    // break is applied at once.
+    S.triggerBreak = (n) => {
+      const o = n != null ? list[n] : list.reduce((a, b) => (dist(b, S.bot.x, S.bot.y) < dist(a, S.bot.x, S.bot.y) ? b : a));
+      if (!o || o.state === "breaking") return false;
+      startBreak(o, true);
+      if (S.status !== "run" && o.state === "breaking") settleOne(o);
+      return true;
+    };
+  }
   return S;
 }
