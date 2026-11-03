@@ -33,6 +33,6 @@ python3 -m http.server 8000    # then open http://localhost:8000
 ```
 
 Credits: the node model and look follow the [erzstat.site Programmator wiki](https://erzstat.site/programs/).
-JavaScript parsing by [acorn](https://github.com/acornjs/acorn) (MIT).
+JavaScript parsing by [acorn](https://github.com/acornjs/acorn) (MIT); the code editor is [CodeMirror 6](https://codemirror.net) (MIT).
 
-License: [MIT](LICENSE). The bundled acorn parser keeps its own MIT licence (`vendor/acorn.LICENSE`).
+License: [MIT](LICENSE). The bundled acorn parser and CodeMirror keep their own MIT licences (`vendor/acorn.LICENSE`, `vendor/codemirror.LICENSE`).

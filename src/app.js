@@ -454,7 +454,8 @@ function renderPalette() {
 }
 
 document.addEventListener("keydown", e => {
-  const typing = ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement && document.activeElement.tagName);
+  const ae = document.activeElement;
+  const typing = ae && (["INPUT", "TEXTAREA", "SELECT"].includes(ae.tagName) || ae.isContentEditable);
   if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); runCompile(true); return; }
   if (typing) return;
   if (!view()) return;
