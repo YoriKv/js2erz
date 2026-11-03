@@ -100,7 +100,10 @@ class Builder {
     this.nodes = []; this.pending = [];
     this.live = new Map();        // game variable name -> number of live JS bindings using it
     this.types = new Map();       // game variable name -> "num" | "cell" | "any" | {outcome: type}
-    this.temps = 0; this.maxTemps = 0;
+    this.temps = 0; this.maxTemps = 0; this.tempPrefix = "_t";
+    this.everNames = new Set();   // every game variable name bound in this program
+    this.reserved = new Set();    // names taken by shared functions (parameters, return site, return value)
+    this.shared = new Map();      // key -> shared function (compiled once, see sharedCall)
     const s = this.emit("start", { params: params.slice() }, null);
     this.pending = [new Hole(this, s, 0)];
   }
@@ -124,7 +127,7 @@ class Builder {
     } else label.waiters.push(...this.pending);
     this.pending = [];
   }
-  temp() { this.temps++; this.maxTemps = Math.max(this.maxTemps, this.temps); return `_t${this.temps}`; }
+  temp() { this.temps++; this.maxTemps = Math.max(this.maxTemps, this.temps); return `${this.tempPrefix}${this.temps}`; }
 }
 
 // ---------------------------------------------------------------- compiler
@@ -137,8 +140,30 @@ export function compile(source, opts = {}) {
     if (e.loc) err.loc = { line: e.loc.line, col: e.loc.column + 1, endLine: e.loc.line, endCol: e.loc.column + 2 };
     throw err;
   }
-  const c = new Compiler(opts);
-  return c.run(ast);
+  // 1. everything inlined; this run also counts how often each function is inlined and how big it gets
+  const once = share => new Compiler({ ...opts, share }).run(ast);
+  const base = once(new Set());
+  base.shared = [];
+  if (opts.share === false) return base;
+  const size = r => r.programs.reduce((a, p) => a + p.nodes.length, 0);
+  // 2. greedily share functions (one compiled copy, reached through a return-site dispatch) while that saves nodes
+  const cands = [...base.stats.values()].filter(st => st.count >= 2 && st.shareable)
+    .sort((a, b) => (b.count - 1) * b.size - (a.count - 1) * a.size);
+  let best = base, set = new Set();
+  for (const st of cands) {
+    if ((st.count - 1) * st.size < 3) continue;
+    let trial;
+    try { trial = once(new Set([...set, st.key])); } catch (e) { continue; }
+    if (size(trial) <= size(best) - 2) { set.add(st.key); best = trial; }
+  }
+  if (best !== base) {
+    best.shared = best.sharedInfo.map(sh => ({ ...sh, saved: null }));
+    const saved = size(base) - size(best);
+    best.sharedSaved = saved;
+  } else best.shared = [];
+  best.inlinedSize = size(base);
+  delete best.stats; delete best.sharedInfo; delete base.stats; delete base.sharedInfo;
+  return best;
 }
 
 class Compiler {
@@ -148,6 +173,9 @@ class Compiler {
     this.programs = [];           // Builder[] in creation order, main first
     this.progFns = new Map();     // JS function name -> {node, name, params}
     this.tech = new Set();
+    this.shareSet = opts.share instanceof Set ? opts.share : new Set();
+    this.stats = new Map();       // function key -> {key, name, count, size, shareable, ctx: Set}
+    this.sharedMode = 0;          // > 0 while compiling the body of a shared function
   }
   warn(msg, node) { this.warnings.push({ msg, loc: locOf(node) }); }
 
@@ -174,7 +202,10 @@ class Compiler {
     for (const p of programs) {
       if (p.nodes.length > NODE_LIMIT) this.warn(`${p.name}: ${p.nodes.length} nodes, over the game's ${NODE_LIMIT}-node limit`, null);
     }
-    return { programs, warnings: this.warnings, tech: [...this.tech] };
+    const sharedInfo = [];
+    for (const b of this.programs) for (const sh of b.shared.values())
+      sharedInfo.push({ program: b.name, name: sh.bind.name, calls: sh.sites.length, entry: sh.tag });
+    return { programs, warnings: this.warnings, tech: [...this.tech], stats: this.stats, sharedInfo };
   }
 
   newProgram(name, params) {
@@ -209,7 +240,7 @@ class Compiler {
       this.queue.push(job);
       scope.map.set(name, { kind: "prog", job });
     } else {
-      scope.map.set(name, { kind: "fn", fn, scope, name });
+      scope.map.set(name, { kind: "fn", fn, scope, name, noShare: d === "use inline" });
     }
   }
 
@@ -222,6 +253,12 @@ class Compiler {
     }
     this.block(stmts);
     b.drop();
+    // shared functions: each body once, after the program's own code; bodies may add calls to other shared functions
+    for (let again = true; again;) {
+      again = false;
+      for (const sh of b.shared.values()) if (!sh.compiled) { this.compileShared(sh); again = true; }
+    }
+    for (const sh of b.shared.values()) this.sharedDispatch(sh);
   }
 
   // ------------------------------------------------------------ variables
@@ -231,8 +268,10 @@ class Compiler {
       if (BUILTIN_VARS.includes(name)) { this.warn(`"${jsName}" is a built-in variable; the local is renamed`, node); name = jsName + "_";}
       let k = 2;
       const base = name;
-      while (this.b.live.get(name) || BUILTIN_VARS.includes(name)) name = `${base}_${k++}`;
+      const taken = n => this.b.live.get(n) || BUILTIN_VARS.includes(n) || this.b.reserved.has(n) || (this.sharedMode && this.b.everNames.has(n));
+      while (taken(name)) name = `${base}_${k++}`;
     }
+    this.b.everNames.add(name);
     const bind = { kind: "var", name };
     scope.map.set(jsName, bind);
     this.b.live.set(name, (this.b.live.get(name) || 0) + 1);
@@ -837,6 +876,130 @@ class Compiler {
   inline(bind, e, ctx) {
     const b = this.b;
     if (this.inlining.includes(bind)) fail(`${bind.name}() is recursive; inlined functions can't recurse (mark it "use program" to make it a CALL)`, e);
+    const fn = bind.fn;
+    // functions are keyed by their source position plus the constant arguments, so constants stay specialised
+    const { key, sig, shareable } = this.callKey(bind, e);
+    let st = this.stats.get(key);
+    if (!st) { st = { key, name: bind.name, count: 0, size: 0, shareable, ctx: new Set() }; this.stats.set(key, st); }
+    st.count++; st.ctx.add(ctx.kind);
+    if (this.shareSet.has(key) && shareable && this.sharedCall(bind, e, ctx, key, sig)) return;
+    const before = b.nodes.length;
+    try { return this.inlineBody(bind, e, ctx); } finally { st.size = Math.max(st.size, b.nodes.length - before); }
+  }
+  callKey(bind, e) {
+    const fn = bind.fn, assigned = assignedNames(fn.body);
+    let shareable = !bind.noShare;
+    const sig = fn.params.map((p, i) => {
+      const pname = p.type === "Identifier" ? p.name : p.left.name;
+      const a = e.arguments[i] || (p.type === "AssignmentPattern" ? p.right : null);
+      if (!a) return { k: "num", v: 0 };
+      if (a.type === "ArrowFunctionExpression" || a.type === "FunctionExpression") { shareable = false; return "fn"; }
+      if (a.type === "Identifier") { const ab = this.scope.lookup(a.name); if (ab && (ab.kind === "fn" || ab.kind === "prog")) { shareable = false; return "fn"; } }
+      const c = this.constEval(a);
+      return c && !assigned.has(pname) ? c : "*";
+    });
+    return { key: `${this.b.name}|${fn.start}:${fn.end}|${JSON.stringify(sig)}`, sig, shareable };
+  }
+
+  // ------------------------------------------------------------ shared functions (compiled once, called through a dispatch)
+  // A call copies the non-constant arguments into the function's own variables, writes its site number into
+  // <fn>_ret and jumps to the body. The body's exits come back through a COMP tree on <fn>_ret. Conditions return
+  // through separate true / false trees; values through <fn>_rv.
+  sharedCall(bind, e, ctx, key, sig) {
+    const b = this.b;
+    let sh = b.shared.get(key);
+    if (!sh) {
+      const st = this.stats.get(key);
+      const mode = st.ctx.has("value") ? "value" : st.ctx.has("cond") ? "cond" : "stmt";
+      const n = [...b.shared.values()].filter(x => x.bind.name === bind.name).length;
+      const tag = this.freeName(bind.name + (n ? n + 1 : ""));
+      sh = { key, bind, sig, mode, tag, sites: [], entry: new Label(), compiled: false,
+        ret: this.reserve(`${tag}_ret`), rv: mode === "value" ? this.reserve(`${tag}_rv`) : null,
+        params: bind.fn.params.map((p, i) => sig[i] === "*" ? this.reserve(`${tag}_${p.type === "Identifier" ? p.name : p.left.name}`) : null) };
+      b.shared.set(key, sh);
+    }
+    if (ctx.kind === "value" && sh.mode !== "value") return false;   // not expected from the counting run: inline it
+    if (ctx.kind === "cond" && sh.mode === "stmt") return false;
+    if (this.inlining.includes(bind)) fail(`${bind.name}() is recursive`, e);
+    // arguments first (they may call the function themselves), then the parameter copies
+    const fn = bind.fn;
+    const ops = fn.params.map((p, i) => sh.params[i] ? this.value(e.arguments[i] || p.right) : null);
+    ops.forEach((op, i) => { if (op) this.emitAssign(sh.params[i], op, e); });
+    const id = sh.sites.length;
+    this.emitAssign(sh.ret, { num: id }, e);
+    b.jump(sh.entry, e);
+    if (ctx.kind === "cond" && sh.mode === "cond") {
+      const tL = new Label(), fL = new Label();
+      sh.sites.push({ tL, fL });
+      ctx.t.push(tL); ctx.f.push(fL); b.pending = [];
+      return true;
+    }
+    const L = new Label();
+    sh.sites.push({ L });
+    b.pending = [L];
+    if (ctx.kind === "value") this.emitAssign(ctx.ret, { var: sh.rv }, e);
+    else if (ctx.kind === "cond") {   // value-returning function used as a condition
+      const q = b.emit("eq", { value: { var: sh.rv }, set: [{ num: 0 }] }, e); this.tech.add("Variables");
+      ctx.t.push(...b.holes(q, [1])); ctx.f.push(...b.holes(q, [0])); b.pending = [];
+    }
+    return true;
+  }
+  reserve(name) { const n = this.freeName(name); this.b.reserved.add(n); this.b.everNames.add(n); return n; }
+  freeName(base) {
+    let name = base, k = 2;
+    while (this.b.everNames.has(name) || this.b.reserved.has(name) || BUILTIN_VARS.includes(name)) name = `${base}_${k++}`;
+    return name;
+  }
+  compileShared(sh) {
+    const b = this.b, fn = sh.bind.fn;
+    sh.compiled = true;
+    b.pending = [];
+    b.place(sh.entry);
+    const saved = { scope: this.scope, loops: this.loops, ctx: this.ctx, inlining: this.inlining, prefix: b.tempPrefix, temps: b.temps };
+    const scope = new Scope(sh.bind.scope, null);
+    fn.params.forEach((p, i) => {
+      const pname = p.type === "Identifier" ? p.name : p.left.name;
+      scope.map.set(pname, sh.params[i] ? { kind: "var", name: sh.params[i] } : { kind: "const", value: sh.sig[i] });
+    });
+    const ctx = sh.mode === "cond" ? { kind: "cond", t: [], f: [] } : { kind: sh.mode, exits: [], ret: sh.rv };
+    this.scope = scope; this.loops = []; this.ctx = ctx; this.inlining = [sh.bind];
+    b.tempPrefix = `_${sh.tag}_t`; b.temps = 0;
+    this.sharedMode++;
+    try {
+      for (const st of fn.body.body) this.hoist(st, scope);
+      this.block(fn.body.body);
+    } finally {
+      this.sharedMode--;
+      this.scope = saved.scope; this.loops = saved.loops; this.ctx = saved.ctx; this.inlining = saved.inlining;
+      b.tempPrefix = saved.prefix; b.temps = saved.temps;
+    }
+    if (ctx.kind === "cond") { sh.exitT = ctx.t; sh.exitF = ctx.f.concat(b.pending); }
+    else sh.exits = ctx.exits.concat(b.pending);
+    b.pending = [];
+  }
+  sharedDispatch(sh) {
+    const b = this.b, loc = sh.bind.fn;
+    const tree = (refs, targets) => {
+      if (!refs.length || !targets.length) { for (const r of refs) r.patch(null); return; }
+      const go = (lo, hi, refsIn) => {
+        b.pending = refsIn;
+        if (lo === hi) { b.jump(targets[lo], loc); return; }
+        const mid = (lo + hi) >> 1;
+        const id = b.emit("cmp", { left: { var: sh.ret }, right: { num: mid } }, loc); this.tech.add("Variables");
+        b.pending = b.holes(id, [1]); b.jump(targets[mid], loc);
+        if (lo <= mid - 1) go(lo, mid - 1, b.holes(id, [2]));
+        if (mid + 1 <= hi) go(mid + 1, hi, b.holes(id, [0]));
+      };
+      go(0, targets.length - 1, refs);
+      b.pending = [];
+    };
+    if (sh.mode === "cond") {
+      tree(sh.exitT, sh.sites.map(s => s.tL || s.L));
+      tree(sh.exitF, sh.sites.map(s => s.fL || s.L));
+    } else tree(sh.exits, sh.sites.map(s => s.L));
+  }
+  inlineBody(bind, e, ctx) {
+    const b = this.b;
     const fn = bind.fn;
     // bind parameters: constants stay constants, the rest are copied into variables
     const scope = new Scope(bind.scope, ctx);

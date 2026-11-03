@@ -139,6 +139,8 @@ function renderDiag(res, err) {
   if (err) { line("err", `${err.loc ? `${err.loc.line}:${err.loc.col}  ` : ""}${err.message}`, err.loc); return; }
   const total = res.programs.reduce((a, p) => a + p.nodes.length, 0);
   line("ok", res.programs.map(p => `${p.name}: ${t("n.nodes", p.nodes.length)}`).join(" · ") + (res.programs.length > 1 ? `  ${t("diag.total", total)}` : ""));
+  if (res.shared && res.shared.length)
+    line("m", t("diag.shared", res.shared.map(sh => `${sh.name}() ×${sh.calls}`).join(", "), t("n.nodes", res.sharedSaved)));
   if (res.tech.length) line("m", t("diag.needs", res.tech.map(techLabel).join(", ")));
   for (const w of res.warnings) line("warn", `${w.loc ? `${w.loc.line}:${w.loc.col}  ` : ""}${w.msg}`, w.loc);
 }

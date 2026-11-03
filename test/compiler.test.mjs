@@ -224,3 +224,80 @@ test("SCAN stores the aimed cell in scan_cell_front", () => {
     { paint: w => fill(w, 4, 4, 10, 10, "DenseOre") });   // bot (4,7) facing east: right 3 = (4,10)
   assert.equal(vars("ore"), 1);
 });
+
+// ---------------------------------------------------------------- shared functions (compiled once)
+const nodesOf = r => r.programs.reduce((a, p) => a + p.nodes.length, 0);
+// run with and without sharing; the variables must agree
+function both(src, names, opts) {
+  const on = run(src, opts), off = (() => {
+    const r = compile(src, { share: false });
+    const w = emptyWorld(opts?.W || 30, opts?.H || 15); w.bot = opts?.bot || { x: 4, y: 7 };
+    if (opts?.paint) opts.paint(w);
+    const s = createSim({ programs: new Map(r.programs.map(p => [p.name, p])), main: r.programs[0].name, world: w, dir: 0 });
+    s.run(opts?.steps || 20000);
+    return { r, s, vars: n => s.vars && s.vars.get(n) && s.vars.get(n).v };
+  })();
+  for (const n of names) assert.equal(on.vars(n), off.vars(n), `variable ${n}`);
+  return { on, off };
+}
+const BIG = `function probe(f, r) { aim(f, r); scan(Category.Walkable); hits = hits + 1; t1 = t1 + f; t2 = t2 + r; t3 = t3 + f * r; }`;
+
+test("a function called often is compiled once and called through a dispatch", () => {
+  const src = `let hits = 0, t1 = 0, t2 = 0, t3 = 0, a = 1, b = 2, c = 3; ${BIG}
+    probe(a, b); probe(b, c); probe(c, a); probe(a, a); probe(b, b);`;
+  const { on, off } = both(src, ["hits", "t1", "t2", "t3"]);
+  assert.ok(nodesOf(on.r) < nodesOf(off.r), `${nodesOf(on.r)} < ${nodesOf(off.r)}`);
+  assert.deepEqual(on.r.shared.map(s => [s.name, s.calls]), [["probe", 5]]);
+  assert.equal(on.vars("hits"), 5);
+  assert.equal(on.vars("t3"), 1 * 2 + 2 * 3 + 3 * 1 + 1 + 4);
+});
+
+test("shared functions return conditions and values to the right call site", () => {
+  // variable arguments (each constant argument set would be its own specialised copy)
+  const cond = `let n = 0, m = 0, a = 1, b = 9, c = 4, z = 0, w = -5;
+    function far(v) { let d = v - 3; d = d * d; d = d + 1; d = d - 1; return d > 4; }
+    if (far(a)) n++; if (far(b)) n += 10; if (far(c)) n += 100; if (!far(z)) m = 1; if (far(w)) m += 10;`;
+  const a = both(cond, ["n", "m"]);
+  assert.ok(a.on.r.shared.length === 1, "far() is shared");
+  assert.deepEqual([a.on.vars("n"), a.on.vars("m")], [10, 10]);
+  const val = `let two = 2, three = 3, four = 4, one = 1;
+    function sq(v) { let r = v * v; r = r + 0.5; r = r - 0.5; r = r * 1; return r; }
+    let a = sq(two) + sq(three); let b = sq(sq(two)); let c = 2 * sq(four) - sq(one);`;
+  const v = both(val, ["a", "b", "c"]);
+  assert.ok(v.on.r.shared.length === 1, "sq() is shared");
+  assert.deepEqual([v.on.vars("a"), v.on.vars("b"), v.on.vars("c")], [13, 16, 31]);
+});
+
+test("constant arguments keep one specialised copy per constant set", () => {
+  const src = `let hits = 0, t1 = 0, t2 = 0, t3 = 0; ${BIG}
+    probe(2, 0); probe(2, 0); probe(2, 0); probe(0, 2); probe(0, 2); probe(0, 2);`;
+  const { on } = both(src, ["hits", "t1", "t2", "t3"]);
+  assert.equal(on.r.shared.length, 2);
+  // the constants stay in the AIM nodes, no aim variables are written
+  assert.ok(!on.r.programs[0].nodes.some(n => n.t === "assign" && /^aim_/.test(n.p.varname)));
+});
+
+test("shared functions keep their own variables and temporaries", () => {
+  // the caller's i, its temporary and the function's local i must not clobber each other
+  const src = `let s = 0; function f(k) { let i = k * 2; i = i + 1; i = i * 3; i = i - 2; i = i + 5; i = i - 5; i = i * 1; return i; }
+    for (let i = 0; i < 3; i++) s = s + (i + 1) * f(i) + f(i + 1) - f(i + 2);`;
+  const { on } = both(src, ["s"]);
+  assert.ok(on.r.shared.length === 1, "f() is shared");
+  const f = k => (k * 2 + 1) * 3 - 2;
+  assert.equal(on.vars("s"), [0, 1, 2].reduce((a, i) => a + (i + 1) * f(i) + f(i + 1) - f(i + 2), 0));
+});
+
+test("nested shared functions and 'use inline'", () => {
+  const src = `let hits = 0, t1 = 0, t2 = 0, t3 = 0, q = 0; ${BIG}
+    function twice(a) { probe(a, 1); probe(a, 2); q = q + a; q = q * 2; }
+    twice(q); twice(q + 1); twice(q + 2);`;
+  const { on } = both(src, ["hits", "t1", "t2", "t3", "q"]);
+  assert.ok(on.r.shared.length >= 1);
+  const forced = compile(src.replace("function twice(a) {", 'function twice(a) { "use inline";'));
+  assert.ok(!forced.shared.some(s => s.name === "twice"));
+});
+
+test("sharing can be switched off", () => {
+  const src = `let hits = 0, t1 = 0, t2 = 0, t3 = 0, a = 1; ${BIG} probe(a, a); probe(a, a); probe(a, a);`;
+  assert.deepEqual(compile(src, { share: false }).shared, []);
+});
