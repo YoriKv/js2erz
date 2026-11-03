@@ -1,6 +1,6 @@
 // World panel: paint a sandbox world and run the compiled programs in it (RUN / DEBUG / Pause / Stop).
 import { T, DIR_ARROW, CELLS } from "./nodes.js";
-import { createSim, makeWorld, makeSeismicWorld, emptyWorld, cellAt, cellColor, BRUSHES, DV, fmtValue,
+import { createSim, makeWorld, emptyWorld, cellAt, cellColor, BRUSHES, DV, fmtValue,
   SEISMIC_DEFAULTS, FOOT, stampInitiator, initiatorAt, minedShare, breakCentre } from "./sim.js";
 import { t, tOr, onLangChange, getLang } from "./i18n.js";
 
@@ -8,9 +8,6 @@ const LS_KEY = "js2erz.world.v1";
 const SIZES = [[64, 48], [96, 72], [128, 96], [192, 144]];
 const SIM_ITEMS = ["RoadSector", "Block", "MiningCharge"];
 const MAX_NPS = 2000;
-// world presets of the scenario select; "seismic" wants a world at least this big for its radius-40 disc
-const SCENARIOS = { asteroid: makeWorld, seismic: makeSeismicWorld };
-const SEISMIC_MIN = [128, 96];
 const INIT_COLOR = "#3c6e80";
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
@@ -40,7 +37,8 @@ const nodeName = ty => (T[ty] ? tOr("node." + ty, T[ty].label) : ty);
 const LABEL_TYPE = Object.fromEntries(Object.entries(T).map(([k, v]) => [v.label, k]));
 const resultWord = r => (r === "success" ? t("sim.success") : r === "fail" ? t("sim.fail") : r);
 const cellName = c => tOr("cell." + c, c);
-const brushLabel = b => tOr("brush." + b.cell, b.label);
+// brushes without a label of their own use the game's name of the cell
+const brushLabel = b => { const l = tOr("brush." + b.cell, b.label || cellName(b.cell)); return l.charAt(0).toUpperCase() + l.slice(1); };
 function trWhy(w) {
   let m;
   if ((m = w.match(/^no program "(.*)"$/))) return t("log.noProg", m[1]);
@@ -84,7 +82,6 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
     <div class="wp-cvbox"><canvas class="wp-cv"></canvas></div>
     <div class="wp-hint wp-m" aria-live="polite"></div>
     <div class="wp-row">
-      <select class="wp-scen" data-ka="sim.scenario" data-kt="sim.scenario">${Object.keys(SCENARIOS).map(k => `<option value="${k}" data-k="scen.${k}"></option>`).join("")}</select>
       <select class="wp-size" data-ka="sim.size">${SIZES.map(([w, h]) => `<option value="${w}x${h}">${w}×${h}</option>`).join("")}</select>
       <label class="wp-l"><span data-k="sim.seed"></span> <input class="wp-seed" type="number" style="width:84px"></label>
       <button type="button" class="wp-gen" data-k="sim.gen" data-kt="sim.genTip"></button>
@@ -117,10 +114,10 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
   const stored = load();
   const state = {
     world: stored?.world && stored.world.cells?.length === stored.world.W * stored.world.H ? stored.world : makeWorld(96, 72),
-    settings: Object.assign({ dir: 0, speed: 40, brush: "Regolith", items: { RoadSector: 20, Block: 20, MiningCharge: 5 }, scenario: "asteroid",
+    settings: Object.assign({ dir: 0, speed: 40, brush: "Regolith", items: { RoadSector: 20, Block: 20, MiningCharge: 5 },
       seismic: { nps: SEISMIC_DEFAULTS.nodesPerSec } }, stored?.settings || {}),
   };
-  if (!SCENARIOS[state.settings.scenario]) state.settings.scenario = "asteroid";
+  delete state.settings.scenario;   // the scenario select is gone
   // simulator options for the seismic initiators (the rest are SEISMIC_DEFAULTS)
   const seisCfg = () => ({ ...SEISMIC_DEFAULTS, nodesPerSec: Math.max(1, +state.settings.seismic.nps || SEISMIC_DEFAULTS.nodesPerSec) });
   let sim = null, paused = true, raf = 0, last = 0, acc = 0;
@@ -178,9 +175,7 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
   const undo = () => stepHist("undo", "redo"), redo = () => stepHist("redo", "undo");
   function newWorld(w) { pushUndo(cloneWorld(state.world)); reset(); state.world = w; seedIn.value = w.seed ?? ""; save(state); fit(); update(); }
   const curSize = () => sizeSel.value.split("x").map(Number);
-  const scenSel = $(".wp-scen");
-  scenSel.value = state.settings.scenario;
-  const generate = seed => { const [W, H] = curSize(); newWorld(SCENARIOS[scenSel.value](W, H, seed)); };
+  const generate = seed => { const [W, H] = curSize(); newWorld(makeWorld(W, H, seed)); };
   $(".wp-gen").addEventListener("click", () => generate(seedIn.value === "" ? undefined : +seedIn.value));
   $(".wp-rand").addEventListener("click", () => generate());
   $(".wp-clear").addEventListener("click", () => { const [W, H] = curSize(); newWorld(emptyWorld(W, H)); });
@@ -201,12 +196,6 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
     e.preventDefault(); e.stopImmediatePropagation();
   }, true);
   sizeSel.addEventListener("change", () => generate(state.world.seed ?? undefined));
-  scenSel.addEventListener("change", () => {
-    state.settings.scenario = scenSel.value;
-    const [W, H] = curSize();
-    if (scenSel.value === "seismic" && (W < SEISMIC_MIN[0] || H < SEISMIC_MIN[1])) sizeSel.value = SEISMIC_MIN.join("x");
-    generate(state.world.seed ?? undefined);
-  });
 
   // seismic row: manual break, node rate, drills (shown when the world has an initiator)
   const seisRow = $(".wp-seis"), snps = $(".wp-snps"), sdrills = $(".wp-sdrills");

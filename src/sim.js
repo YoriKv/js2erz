@@ -33,7 +33,8 @@ export function cellColor(name) {
 }
 export const BRUSHES = [
   ["Back", "Dug out"], ["Road", "Road"], ["Regolith", "Regolith"], ["Chondrite", "Chondrite"], ["SulfideRock", "Sulfide rock"],
-  ["DenseOre", "Dense ore"], ["WaterIce", "Water ice"], ["SinterCrust", "Sinter crust"], ["MetallicCrust", "Metallic crust"],
+  ["DenseOre", "Dense ore"], ["WaterIce", "Water ice"], ["Breccia"], ["ConsolidatedRock"], ["SilicateRock"], ["MetallicRock"],
+  ["PhosphateRock"], ["CarbonaceousRock"], ["CryoIce"], ["SinterCrust", "Sinter crust"], ["MetallicCrust", "Metallic crust"],
   ["BlockSimple", "Block"], ["TectonicMass", "Wall (undiggable)"],
 ].map(([cell, label]) => ({ cell, label, color: cellColor(cell) }));
 
@@ -83,46 +84,136 @@ function fractal(n, x, y, oct = 3) {
   return sum / norm;
 }
 
-// seeded rock layers, ore pockets, ice and caves (shared by the world presets)
-function terrain(W, H, rnd) {
-  const nBase = valueNoise(rnd), nLayer = valueNoise(rnd), nOre = valueNoise(rnd), nIce = valueNoise(rnd),
-    nCave = valueNoise(rnd), nHard = valueNoise(rnd);
-  const cells = new Array(W * H);
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-    let c = "Regolith";
-    const base = fractal(nBase, x / 18, y / 18);
-    if (base > 0.12) c = "Chondrite";
-    else if (base < -0.3) c = "Breccia";
-    if (fractal(nLayer, x / 9, y / 9, 2) > 0.38) c = "SilicateRock";
-    const hard = fractal(nHard, x / 14, y / 14);
-    if (hard > 0.42) c = hard > 0.52 ? "MetallicCrust" : "SinterCrust";
-    else {
-      const ore = fractal(nOre, x / 5, y / 5, 2);
-      if (ore > 0.5) c = "DenseOre"; else if (ore > 0.4) c = "SulfideRock";
-      if (fractal(nIce, x / 7, y / 7, 2) > 0.46) c = "WaterIce";
-      if (fractal(nCave, x / 11, y / 11) < -0.4) c = "Back";
+// ---------------------------------------------------------------- random worlds
+// Modelled on the game's map: host rock (regolith, chondrite, breccia, some consolidated rock) in long streaky
+// bands that follow one flow direction; one or two primary minerals in veins along that direction, packed into
+// richer zones, with lacy edges and loose specks around them; in a quarter of the worlds an impactite vein (solid,
+// thick, bending) wrapped in a rim of sinter crust; small caves. Sizes follow the real map at 1 cell = 1 cell.
+const HOSTS = [["Regolith", 5], ["Chondrite", 4], ["Breccia", 4], ["ConsolidatedRock", 0.8]];
+// minerals that occur together on one moon (the game's region lists)
+const SUITES = [
+  ["DenseOre", "SulfideRock", "MetallicRock"],            // Himalia
+  ["SilicateRock"],                                       // Korda
+  ["SilicateRock", "MetallicRock"],                       // Euporie
+  ["WaterIce", "CryoIce", "PhosphateRock"],               // Harpalyke
+  ["WaterIce", "CarbonaceousRock", "SilicateRock"],       // Dia
+  ["CarbonaceousRock", "WaterIce"],                       // Carpo
+  ["CarbonaceousRock", "WaterIce", "MetallicRock"],       // Valetudo
+];
+const pick = (rnd, a) => a[Math.floor(rnd() * a.length)];
+// warped, stretched noise: bands `along` cells long and `across` cells wide at angle `ang`, bent by `warp` cells
+function bands(rnd, ang, along, across, warp) {
+  const n = valueNoise(rnd), wx = valueNoise(rnd), wy = valueNoise(rnd), c = Math.cos(ang), s = Math.sin(ang);
+  return (x, y) => {
+    const X = x + warp * fractal(wx, x / 40, y / 40, 2), Y = y + warp * fractal(wy, x / 40, y / 40, 2);
+    return fractal(n, (X * c + Y * s) / along, (Y * c - X * s) / across, 3);
+  };
+}
+// the value that `share` of the scores reach
+function cut(score, share) {
+  const s = Float32Array.from(score).sort();
+  return s[Math.min(s.length - 1, Math.max(0, Math.floor((1 - share) * s.length)))];
+}
+
+// One impactite vein: a bending spine across the world, 5-14 cells thick (thicker in bigger worlds), with a side
+// branch or two, ragged edges, and a 2-4 cell rim of sinter crust that frays into specks.
+function crustVein(W, H, cells, rnd) {
+  const N = W * H, f = new Float32Array(N).fill(1e9), edge = valueNoise(rnd), thick = valueNoise(rnd);
+  const size = Math.sqrt(W * H) / 110, wide = (5 + rnd() * 5) * Math.max(0.7, size);
+  function spine(x, y, ang, len, w0) {
+    for (let t = 0; t < len; t++) {
+      const w = w0 * (0.55 + 0.9 * (fractal(thick, t / 30 + w0, 0.5, 2) * 0.5 + 0.5)), R = Math.ceil(w + 5);
+      for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
+        const X = Math.round(x) + dx, Y = Math.round(y) + dy;
+        if (X < 0 || Y < 0 || X >= W || Y >= H) continue;
+        const d = Math.hypot(X - x, Y - y) - w, i = Y * W + X;
+        if (d < f[i]) f[i] = d;
+      }
+      ang += (rnd() - 0.5) * 0.12;
+      x += Math.cos(ang); y += Math.sin(ang);
     }
-    if (x === 0 || y === 0 || x === W - 1 || y === H - 1) c = "TectonicMass";
-    cells[y * W + x] = c;
   }
-  return cells;
+  // start outside one side of the world, aim across it through a random inner point
+  const tx = W * (0.2 + 0.6 * rnd()), ty = H * (0.2 + 0.6 * rnd()), a = rnd() * 2 * Math.PI, L = Math.hypot(W, H);
+  const pts = [];
+  { let x = tx - Math.cos(a) * L * 0.6, y = ty - Math.sin(a) * L * 0.6; pts.push([x, y]); spine(x, y, a, L * 1.2, wide); }
+  for (let b = rnd() < 0.5 ? 1 : 2; b > 0; b--) {
+    const s = 0.3 + 0.4 * rnd();
+    spine(tx + Math.cos(a) * L * (s - 0.6) * 1.2, ty + Math.sin(a) * L * (s - 0.6) * 1.2, a + (rnd() < 0.5 ? 1 : -1) * (0.5 + rnd() * 0.6),
+      L * (0.15 + rnd() * 0.2), wide * (0.4 + rnd() * 0.3));
+  }
+  const rim = 2 + rnd() * 1.5;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = y * W + x, d = f[i] + 2.2 * fractal(edge, x / 6, y / 6, 2);
+    if (d < 0) cells[i] = "MetallicCrust";
+    else if (d < rim || (d < rim + 3 && rnd() < 0.2)) cells[i] = "SinterCrust";
+  }
+}
+
+function terrain(W, H, rnd) {
+  const N = W * H, cells = new Array(N), flow = rnd() * Math.PI;
+  const each = fn => { const a = new Float32Array(N); for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) a[y * W + x] = fn(x, y); return a; };
+  const r = () => rnd();
+
+  // host rock: 2-3 kinds in bands of unequal width (consolidated rock stays a minor one), with specks of the others
+  const hosts = [], pool = HOSTS.slice();
+  for (let k = 2 + (r() < 0.5 ? 1 : 0); k > 0 && pool.length; k--) {
+    let w = r() * pool.reduce((s, h) => s + h[1], 0), i = 0;
+    while (w > pool[i][1]) w -= pool[i++][1];
+    hosts.push(pool.splice(i, 1)[0][0]);
+  }
+  const hw = hosts.map(h => h === "ConsolidatedRock" ? 0.25 : 0.4 + r()), hsum = hw.reduce((a, b) => a + b, 0);
+  const hs = each(bands(rnd, flow, 36, 11, 16)), cuts = [];
+  for (let i = 1, acc = 0; i < hosts.length; i++) cuts.push(cut(hs, 1 - (acc += hw[i - 1] / hsum)));
+  for (let i = 0; i < N; i++) {
+    let k = 0;
+    while (k < cuts.length && hs[i] < cuts[k]) k++;
+    cells[i] = r() < 0.05 ? pick(rnd, hosts) : hosts[k];
+  }
+  const isHost = new Set(hosts);
+
+  // primary minerals: one or two from one suite, the first takes more of the ground. Veins are the ridges (zero
+  // lines) of band noise, gathered into richer zones; "net" deposits are a finer, less stretched mesh.
+  const suite = pick(rnd, SUITES), ores = [pick(rnd, suite)];
+  if (suite.length > 1 && r() < 0.5) ores.push(pick(rnd, suite.filter(o => o !== ores[0])));
+  const shares = ores.length === 1 ? [0.16 + r() * 0.1] : [0.13 + r() * 0.07, 0.06 + r() * 0.05];
+  ores.forEach((ore, m) => {
+    const ang = flow + (r() - 0.5) * 0.7, net = r() < 0.35;
+    const vein = net ? bands(rnd, ang, 14, 9, 6) : bands(rnd, ang, 34, 9, 12);
+    const rich = valueNoise(rnd), speck = 0.04 + r() * 0.06;
+    const sc = each((x, y) => 0.35 * fractal(rich, x / 48, y / 48, 2) - Math.abs(vein(x, y)) + (r() - 0.5) * 0.16);
+    const at = cut(sc, shares[m]), loose = cut(sc, shares[m] * 2.2);
+    for (let i = 0; i < N; i++) if (isHost.has(cells[i]) && (sc[i] >= at || (sc[i] >= loose && r() < speck))) cells[i] = ore;
+  });
+
+  // impactite vein with a sinter crust rim (1 world in 4)
+  if (r() < 0.25) crustVein(W, H, cells, rnd);
+
+  // caves, border
+  const cave = valueNoise(rnd);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = y * W + x;
+    if (fractal(cave, x / 16, y / 16) < -0.46) cells[i] = "Back";
+    if (x === 0 || y === 0 || x === W - 1 || y === H - 1) cells[i] = "TectonicMass";
+  }
+  return { cells, ores, host: hosts[0] };
 }
 const toSeed = seed => (seed == null || !isFinite(seed) ? Math.floor(Math.random() * 1e6) : Math.floor(seed));
 // open 3x3 for the bot body, no hard rock within 4 cells
-function clearPocket(w, bx, by) {
+function clearPocket(w, bx, by, host = "Regolith") {
   const { W, H, cells } = w;
   for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) {
     const X = bx + dx, Y = by + dy;
     if (X <= 0 || Y <= 0 || X >= W - 1 || Y >= H - 1) continue;
     const i = Y * W + X;
     if (Math.abs(dx) <= 1 && Math.abs(dy) <= 1) cells[i] = "Back";
-    else if (cells[i] === "SinterCrust" || cells[i] === "MetallicCrust") cells[i] = "Regolith";
+    else if (cells[i] === "SinterCrust" || cells[i] === "MetallicCrust") cells[i] = host;
   }
 }
 
 export function makeWorld(W = 96, H = 72, seed) {
   seed = toSeed(seed);
-  const cells = terrain(W, H, mulberry32(seed));
+  const { cells, ores, host } = terrain(W, H, mulberry32(seed));
   const bot = { x: W >> 1, y: H >> 1 };
   const set = (x, y, c) => { if (x > 0 && y > 0 && x < W - 1 && y < H - 1) cells[y * W + x] = c; };
   // a road ring west of the bot, so road-following programs work at once
@@ -131,21 +222,8 @@ export function makeWorld(W = 96, H = 72, seed) {
     const x = Math.round(rcx + R * Math.cos(a * Math.PI / 180)), y = Math.round(rcy + R * Math.sin(a * Math.PI / 180));
     for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) set(x + dx, y + dy, "Road");
   }
-  const w = { W, H, seed, cells, bot };
-  clearPocket(w, bot.x, bot.y);
-  return w;
-}
-// "Seismic" preset: the same rock with a seismic initiator in the middle and the bot inside its break radius.
-// Undiggable crust inside the radius becomes sinter crust (hard but diggable), so the disc can be mined out.
-export function makeSeismicWorld(W = 128, H = 96, seed) {
-  seed = toSeed(seed);
-  const cells = terrain(W, H, mulberry32(seed));
-  const ix = W >> 1, iy = H >> 1;
-  const bot = { x: ix, y: iy };   // the bot starts on the initiator's centre (where a break can't hurt it)
-  const w = { W, H, seed, cells, bot, initiators: [] };
-  stampInitiator(w, ix, iy, 3);
-  discCells(w, w.initiators[0], SEISMIC_DEFAULTS, (x, y) => { if (cells[y * W + x] === "MetallicCrust") cells[y * W + x] = "SinterCrust"; });
-  clearPocket(w, bot.x, bot.y);
+  const w = { W, H, seed, cells, bot, ores };
+  clearPocket(w, bot.x, bot.y, host);
   return w;
 }
 export function emptyWorld(W, H) {

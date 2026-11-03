@@ -144,6 +144,21 @@ test("read-only builtin assign fails; aim_x moves the aim", () => {
   assert.equal(s.result, "success"); assert.equal(s.aim.rel, false); assert.equal(s.aim.right, -2);
 });
 
+test("makeWorld: one or two primary minerals in veins, impactite with a sinter rim in about a quarter", () => {
+  let imp = 0;
+  for (let seed = 0; seed < 80; seed++) {
+    const w = makeWorld(96, 72, seed), n = w.cells.length, count = c => w.cells.filter(x => x === c).length;
+    assert.ok(w.ores.length === 1 || w.ores.length === 2, `seed ${seed}`);
+    const ore = w.ores.reduce((s, o) => s + count(o), 0) / n;
+    assert.ok(ore > 0.05 && ore < 0.35, `seed ${seed}: ore share ${ore}`);
+    const crust = count("MetallicCrust");
+    if (crust) { imp++; assert.ok(count("SinterCrust") > crust * 0.2, `seed ${seed}: sinter rim`); }
+    else assert.equal(count("SinterCrust"), 0, `seed ${seed}: no sinter without impactite`);
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) assert.equal(cellAt(w, w.bot.x + dx, w.bot.y + dy), "Back");
+  }
+  assert.ok(imp >= 10 && imp <= 30, `impactite in ${imp} of 80`);
+});
+
 test("makeWorld is deterministic per seed", () => {
   const a = makeWorld(96, 72, 42), b = makeWorld(96, 72, 42);
   assert.deepEqual(a.cells, b.cells);
@@ -153,7 +168,14 @@ test("makeWorld is deterministic per seed", () => {
 });
 
 // ---------------------------------------------------------------- seismic initiator
-import { makeSeismicWorld, stampInitiator, initiatorAt, minedShare, SEISMIC_DEFAULTS } from "../src/sim.js";
+import { stampInitiator, initiatorAt, minedShare, SEISMIC_DEFAULTS } from "../src/sim.js";
+// the seismic example's world: 128x96, an initiator on the bot's start, no impactite inside the disc
+function seismicWorld(seed) {
+  const w = makeWorld(128, 96, seed);
+  stampInitiator(w, w.bot.x, w.bot.y, 3);
+  for (let i = 0; i < w.cells.length; i++) if (w.cells[i] === "MetallicCrust") w.cells[i] = "SinterCrust";
+  return w;
+}
 
 // a room of Regolith with an initiator centred on (30, 30); break centre (31, 31) with the default offset
 function rockRoom(W = 90, H = 80) {
@@ -321,11 +343,9 @@ test("seismic: worlds without an initiator behave as before", () => {
   assert.equal(a.seismic, null); assert.equal(a.dead, null); assert.equal(a.triggerBreak, undefined);
 });
 
-test("makeSeismicWorld: reproducible, initiator in the middle, bot on its centre", () => {
-  const a = makeSeismicWorld(128, 96, 9), b = makeSeismicWorld(128, 96, 9);
-  assert.deepEqual(a.cells, b.cells); assert.deepEqual(a.initiators, b.initiators);
+test("seismic: an initiator placed on the bot's start", () => {
+  const a = seismicWorld(9);
   assert.deepEqual(a.initiators, [{ x: 64, y: 48, drills: 3 }]);
-  assert.deepEqual(a.bot, { x: 64, y: 48 });
   assert.equal(initiatorAt(a, a.bot.x, a.bot.y), 0, "bot on the footprint");
   assert.ok(minedShare(a, a.initiators[0]) < 0.3);
 });
@@ -334,7 +354,7 @@ test("seismic example: digs the disc, leaves the radius and survives the break",
   const { compile } = await import("../src/compiler.js");
   const { EXAMPLES } = await import("../src/examples.js");
   const r = compile(EXAMPLES.find(e => e.id === "seismic").code);
-  const s = createSim({ programs: new Map(r.programs.map(p => [p.name, p])), main: r.programs[0].name, world: makeSeismicWorld(128, 96, 2) });
+  const s = createSim({ programs: new Map(r.programs.map(p => [p.name, p])), main: r.programs[0].name, world: seismicWorld(2) });
   const o = s.seismic.list[0];
   s.run(100000);
   assert.equal(o.state, "working", `share ${o.share}`);

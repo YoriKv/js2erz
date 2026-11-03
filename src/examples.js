@@ -125,9 +125,10 @@ while (true) {
     id: "seismic", title: "Seismic: mine, then leave the radius",
     code: `// Seismic hazard: when the rock around a seismic initiator is about 80% mined out, the initiator starts working,
 // and about 10 minutes later it breaks the layer: the rock grows back and bots within 40 cells are crushed.
-// Programs cannot see buildings, so the break centre is a constant here: (65, 49) in the simulator's Seismic
-// scenario (128×96, any seed; pick it in the Simulator tab). Each round digs lanes over the whole disc, which
-// starts the initiator, then drives out of the radius and waits for the break before it digs the new rock.
+// Programs cannot see buildings, so the break centre is a constant here: (65, 49) for an initiator on (64, 48).
+// To try it, make a 128×96 world in the Simulator tab and click the Initiator brush on the bot's start (64, 48).
+// Each round digs lanes over the whole disc, which starts the initiator, then drives out of the radius and waits
+// for the break before it digs the new rock.
 "use program SeismicLanes";
 
 const CX = 65, CY = 49;         // break centre
