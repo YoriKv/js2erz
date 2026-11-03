@@ -27,7 +27,7 @@ let compiled = [];        // [{prog, routes, edited, view, undo, redo}] from the
 let imported = store.imported;         // plain Programs from JSON imports (kept across reloads)
 let cur = 0;              // index into tabs()
 let sel = new Set(), selEdge = null, activePort = null, hover = null, placing = null;
-let simCur = null, codeHl = new Set(), lastErr = null, lastRes = null;
+let simCur = null, simCalls = [], callKey = null, codeHl = new Set(), lastErr = null, lastRes = null;
 const tabs = () => compiled.concat(imported.map(p => wrapImported(p)));
 const wrapCache = new WeakMap();
 function wrapImported(p) {
@@ -233,8 +233,8 @@ function render() {
   const z = v.view || { x: 40, y: 40, z: 1 };
   svg.innerHTML = `<defs>${defs}<pattern id="gp" width="${U}" height="${U}" patternUnits="userSpaceOnUse"><path d="M${U} 0H0V${U}" fill="none" stroke="#33281f" stroke-width="1"/></pattern></defs>` +
     `<g id="vp" transform="translate(${z.x},${z.y}) scale(${z.z})"><rect x="-200000" y="-200000" width="400000" height="400000" fill="url(#gp)"/>${body}` +
-    `<rect id="simMark" fill="none" stroke="#3fbf5f" stroke-width="4" rx="4" visibility="hidden"/><g id="over"></g></g>`;
-  vp = svg.querySelector("#vp"); simMark = svg.querySelector("#simMark");
+    `<g id="callMarks" pointer-events="none"></g><rect id="simMark" fill="none" stroke="#3fbf5f" stroke-width="4" rx="4" visibility="hidden"/><g id="over"></g></g>`;
+  vp = svg.querySelector("#vp"); simMark = svg.querySelector("#simMark"); callKey = null;
   placeSimMark();
   const c = $("count");
   c.textContent = t("hud.count", p.nodes.length, NODE_LIMIT) + (sel.size > 1 ? t("ins.selected", sel.size) : "");
@@ -572,18 +572,36 @@ let world = null;
 function placeSimMark() {
   if (!simMark) return;
   const v = view();
+  placeCallMarks(v);
   if (!simCur || !v || simCur.program !== v.prog.name || !v.prog.nodes[simCur.node]) { simMark.setAttribute("visibility", "hidden"); return; }
   const n = v.prog.nodes[simCur.node], [w, h] = sizePx(n);
   simMark.setAttribute("x", n.x * U - 7); simMark.setAttribute("y", n.y * U - 7);
   simMark.setAttribute("width", w + 14); simMark.setAttribute("height", h + 14);
   simMark.setAttribute("visibility", "visible");
 }
-function onSimCurrent(c) {
-  simCur = c;
+// CALL nodes of the shown program that wait for their subprogram: a fainter frame and the call level (1 = called by
+// the main program). A recursive program can wait on the same CALL node at several levels.
+function placeCallMarks(v) {
+  const g = svg.querySelector("#callMarks"); if (!g) return;
+  const levels = new Map();
+  if (v) simCalls.forEach((c, i) => { if (c.program === v.prog.name && v.prog.nodes[c.node]) (levels.get(c.node) || levels.set(c.node, []).get(c.node)).push(i + 1); });
+  const key = [...levels].map(([id, l]) => `${id}:${l.join(",")}`).join(";");
+  if (key === callKey) return;
+  callKey = key;
+  g.innerHTML = [...levels].map(([id, l]) => {
+    const n = v.prog.nodes[id], [w, h] = sizePx(n), x = n.x * U, y = n.y * U;
+    const txt = l.join(" · "), bw = Math.max(22, 10 + txt.length * 8.5), bx = x + w + 7 - bw / 2, by = y - 7 - 11;
+    return `<rect x="${x - 7}" y="${y - 7}" width="${w + 14}" height="${h + 14}" rx="4" fill="#3fbf5f" fill-opacity=".08" stroke="#3fbf5f" stroke-width="3.5" stroke-dasharray="0.1 7" stroke-linecap="round"/>` +
+      `<rect x="${bx}" y="${by}" width="${bw}" height="22" rx="11" fill="#2a6b3a" stroke="#3fbf5f" stroke-width="1.5"/>` +
+      `<text x="${bx + bw / 2}" y="${by + 16}" text-anchor="middle" fill="#e8f7ec" font-size="15" font-weight="700" font-family="Tektur, Bahnschrift, sans-serif">${txt}</text>`;
+  }).join("");
+}
+function onSimCurrent(c, calls = []) {
+  simCur = c; simCalls = calls;
   placeSimMark();
-  let line = null;
-  if (c) { const t = tabs().find(x => x.prog.name === c.program); const n = t && t.prog.nodes[c.node]; if (n && n.src && !t.imported) line = n.src.line; }
-  editor.setMarks({ cur: line });
+  const lineOf = (program, id) => { const t = tabs().find(x => x.prog.name === program); const n = t && t.prog.nodes[id]; return n && n.src && !t.imported ? n.src.line : null; };
+  const line = c ? lineOf(c.program, c.node) : null;
+  editor.setMarks({ cur: line, call: calls.map(k => lineOf(k.program, k.node)).filter(l => l != null) });
   if (line) editor.reveal(line);
 }
 world = mountWorldPanel($("tab-world"), {

@@ -177,7 +177,7 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
 
   const brushBar = $(".wp-brushes"), note = $(".wp-note"), helpBox = $(".wp-helpbox");
   const renderHelp = () => {
-    helpBox.innerHTML = [t("sim.hint", t("sim.run"), t("sim.step")), t("sim.ctrl"), t("sim.alt"), t("sim.helpView"), t("sim.helpUndo")]
+    helpBox.innerHTML = [t("sim.hint", t("sim.run"), t("sim.step")), t("sim.ctrl"), t("sim.alt"), t("sim.helpView"), t("sim.helpUndo"), t("sim.helpCalls", nodeName("call"))]
       .map(l => `<span>${esc(l)}</span>`).join("");
   };
   renderHelp();
@@ -293,7 +293,7 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
 
   function update() {
     draw(); renderInfo();
-    onCurrent(sim ? sim.current() : null);
+    onCurrent(sim ? sim.current() : null, sim ? sim.calls() : []);
     root.querySelector(".wp-pause").disabled = !sim || paused || sim.status !== "run";
     updSeis();
   }

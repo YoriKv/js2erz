@@ -525,3 +525,18 @@ test("loadWorld / loadSettings check stored data", () => {
   assert.equal(loadSettings({ brush: "initiator" }, d).brush, "initiator");
   assert.deepEqual(d.items, { RoadSector: 20, Block: 20, MiningCharge: 5 }, "defaults untouched");
 });
+
+test("calls(): the CALL nodes waiting on the stack, outermost first; empty once finished", () => {
+  const m = prog("m", [["call", [2, 2, 2], { program: "a", args: [] }], ["exit", [], { fail: false }]]);
+  const a = prog("a", [["pass", [2]], ["call", [3, 3, 3], { program: "b", args: [] }], ["exit", [], { fail: false }]]);
+  const b = prog("b", [["pass", [2]], ["exit", [], { fail: false }]]);
+  const s = createSim({ programs: progs(m, a, b), main: "m", world: world() });
+  assert.deepEqual(s.calls(), []);
+  s.step(); s.step();                       // START, CALL a
+  assert.deepEqual(s.calls(), [{ program: "m", node: 1 }]);
+  s.step(); s.step(); s.step(); s.step();   // START, PASS, CALL b, START
+  assert.deepEqual(s.calls(), [{ program: "m", node: 1 }, { program: "a", node: 2 }]);
+  assert.deepEqual(s.current(), { program: "b", node: 1 });
+  s.run(20);
+  assert.equal(s.status, "done"); assert.deepEqual(s.calls(), []);
+});

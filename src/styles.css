@@ -155,8 +155,10 @@ code, kbd { font-family: var(--f-mono); font-size: 12.5px; }
 .ce .cm-editor { height: 100%; }
 .ce .cm-editor.cm-focused { outline: none; }
 .cm-l-hl { background: rgba(62,139,255,.16); } .cm-l-err { background: rgba(229,72,77,.14); } .cm-l-cur { background: rgba(63,191,95,.22) !important; }
+.cm-l-call { background: rgba(63,191,95,.09); }
 .cm-gutterElement.cm-g-err { color: #fff; background: var(--bad); } .cm-gutterElement.cm-g-warn { color: #15110e; background: var(--warn); }
 .cm-gutterElement.cm-g-hl { color: #9cc4ff; } .cm-gutterElement.cm-g-cur { color: #15110e; background: var(--ok); }
+.cm-gutterElement.cm-g-call { color: #15110e; background: rgba(63,191,95,.55); }
 .t-fn { color: #ffe4a3; font-weight: 600; } .t-en { color: #7fc8ff; } .t-sv { color: #ff9e9e; }
 
 @media (max-width: 900px) {

@@ -1,7 +1,7 @@
 // Code editor: CodeMirror 6 (vendor/codemirror.mjs) with the game API added: completion of the built-in functions,
 // enum members, system variables and the program's own names, highlighting of game names, lint diagnostics,
-// and line marks (node hover, current simulator node). The API (value, setValue, setMarks, setDiagnostics, reveal,
-// select, focus) is what app.js uses.
+// and line marks (node hover, current simulator node, the CALL nodes waiting on its stack). The API (value, setValue,
+// setMarks, setDiagnostics, reveal, select, focus) is what app.js uses.
 import {
   EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, dropCursor, highlightSpecialChars,
   rectangularSelection, crosshairCursor, Decoration, ViewPlugin, GutterMarker, gutterLineClass, EditorState, StateField, StateEffect,
@@ -136,27 +136,29 @@ const gameHighlight = ViewPlugin.fromClass(class {
 // ---------------------------------------------------------------- line marks (node hover, simulator) and error lines
 const setLineMarks = StateEffect.define();
 const lineMarks = StateField.define({
-  create: () => ({ hl: new Set(), cur: null, err: new Set(), warn: new Set() }),
+  create: () => ({ hl: new Set(), cur: null, call: new Set(), err: new Set(), warn: new Set() }),
   update(v, tr) { for (const e of tr.effects) if (e.is(setLineMarks)) v = { ...v, ...e.value }; return v; },
 });
-const lineDeco = { hl: Decoration.line({ class: "cm-l-hl" }), cur: Decoration.line({ class: "cm-l-cur" }), err: Decoration.line({ class: "cm-l-err" }) };
+const lineDeco = { hl: Decoration.line({ class: "cm-l-hl" }), cur: Decoration.line({ class: "cm-l-cur" }), call: Decoration.line({ class: "cm-l-call" }), err: Decoration.line({ class: "cm-l-err" }) };
 const lineDecos = EditorView.decorations.compute([lineMarks, "doc"], state => {
   const m = state.field(lineMarks), n = state.doc.lines, by = new Map();
   const put = (line, d) => { if (line >= 1 && line <= n) (by.get(line) || by.set(line, []).get(line)).push(d); };
   for (const l of m.err) put(l, lineDeco.err);
   for (const l of m.hl) put(l, lineDeco.hl);
+  for (const l of m.call) if (l !== m.cur) put(l, lineDeco.call);
   if (m.cur) put(m.cur, lineDeco.cur);
   const b = new RangeSetBuilder();
   for (const l of [...by.keys()].sort((a, c) => a - c)) { const pos = state.doc.line(l).from; for (const d of by.get(l)) b.add(pos, pos, d); }
   return b.finish();
 });
 class LineClass extends GutterMarker { constructor(c) { super(); this.elementClass = c; } }
-const gutterMarks = { err: new LineClass("cm-g-err"), warn: new LineClass("cm-g-warn"), hl: new LineClass("cm-g-hl"), cur: new LineClass("cm-g-cur") };
+const gutterMarks = { err: new LineClass("cm-g-err"), warn: new LineClass("cm-g-warn"), hl: new LineClass("cm-g-hl"), call: new LineClass("cm-g-call"), cur: new LineClass("cm-g-cur") };
 const gutterClasses = gutterLineClass.compute([lineMarks, "doc"], state => {
   const m = state.field(lineMarks), n = state.doc.lines, by = new Map();
   for (const l of m.warn) by.set(l, "warn");
   for (const l of m.err) by.set(l, "err");
   for (const l of m.hl) if (!by.has(l)) by.set(l, "hl");
+  for (const l of m.call) by.set(l, "call");
   if (m.cur) by.set(m.cur, "cur");
   const b = new RangeSetBuilder();
   for (const l of [...by.keys()].filter(l => l >= 1 && l <= n).sort((a, c) => a - c)) { const pos = state.doc.line(l).from; b.add(pos, pos, gutterMarks[by.get(l)]); }
@@ -229,7 +231,7 @@ export function createEditor(root, { value = "", onChange = () => {}, onCursor =
     },
     setMarks(m) {
       const v = {};
-      for (const k of ["hl", "err", "warn"]) if (m[k]) v[k] = new Set(m[k]);
+      for (const k of ["hl", "call", "err", "warn"]) if (m[k]) v[k] = new Set(m[k]);
       if ("cur" in m) v.cur = m.cur;
       view.dispatch({ effects: setLineMarks.of(v) });
     },

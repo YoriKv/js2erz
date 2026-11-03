@@ -515,6 +515,8 @@ export function createSim({ programs, main, world, dir = 0, items = { RoadSector
     if (S.status === "run" && S.frames.length) { const f = S.frames[S.frames.length - 1]; return { program: f.program, node: f.node }; }
     return S.last;
   };
+  // the CALL nodes waiting for their subprogram, outermost first (the main program's call is level 1)
+  S.calls = () => S.status === "run" ? S.frames.slice(0, -1).map(f => ({ program: f.program, node: f.waiting })) : [];
   S.step = () => {
     if (S.status !== "run") return;
     runNode();
