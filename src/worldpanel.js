@@ -59,7 +59,7 @@ function trLog(line) {
   if ((m = line.match(/^CALL "(.*)": no such program → halt$/))) return t("log.callNo", nodeName("call"), m[1]);
   if ((m = line.match(/^CALL "(.*)": stack overflow → halt$/))) return t("log.callOver", nodeName("call"), m[1]);
   if ((m = line.match(/^CALL "(.*)"$/))) return t("log.call", nodeName("call"), m[1]);
-  if ((m = line.match(/^Seismic initiator at \((\d+), (\d+)\) started working: break in (\d+) nodes, (\d+) drills left$/))) return t("log.seisWork", m[1], m[2], m[3], m[4]);
+  if ((m = line.match(/^Seismic initiator at \((\d+), (\d+)\) started working: break in (\d+) nodes$/))) return t("log.seisWork", m[1], m[2], m[3]);
   if ((m = line.match(/^Seismic break at \((\d+), (\d+)\), radius (\d+)( \(by hand\))?$/))) return t(m[4] ? "log.seisHand" : "log.seisBreak", m[1], m[2], m[3]);
   if ((m = line.match(/^Seismic break at \((\d+), (\d+)\) over: (\d+) cells refilled$/))) return t("log.seisOver", m[1], m[2], m[3]);
   return line;
@@ -93,8 +93,6 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
     </div>
     <div class="wp-row wp-seis" hidden>
       <button type="button" class="wp-trig" data-k="seis.trigger" data-kt="seis.triggerTip"></button>
-      <label class="wp-l" data-kt="seis.npsTip"><input class="wp-snps" type="number" min="1" step="1" style="width:72px"> <span data-k="seis.nps"></span></label>
-      <label class="wp-l"><span data-k="seis.drillsIn"></span> <input class="wp-sdrills" type="number" min="0" step="1" style="width:52px"></label>
     </div>
     <div class="wp-row wp-items">${SIM_ITEMS.map(it => `<label class="wp-l"><span data-item-label="${it}"></span> <input type="number" min="0" step="1" data-item="${it}" style="width:56px"></label>`).join("")}</div>
     <div class="wp-info" aria-live="polite"></div>`;
@@ -114,12 +112,11 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
   const stored = load();
   const state = {
     world: stored?.world && stored.world.cells?.length === stored.world.W * stored.world.H ? stored.world : makeWorld(96, 72),
-    settings: Object.assign({ dir: 0, speed: 40, brush: "Regolith", items: { RoadSector: 20, Block: 20, MiningCharge: 5 },
-      seismic: { nps: SEISMIC_DEFAULTS.nodesPerSec } }, stored?.settings || {}),
+    settings: Object.assign({ dir: 0, speed: 40, brush: "Regolith", items: { RoadSector: 20, Block: 20, MiningCharge: 5 } }, stored?.settings || {}),
   };
-  delete state.settings.scenario;   // the scenario select is gone
-  // simulator options for the seismic initiators (the rest are SEISMIC_DEFAULTS)
-  const seisCfg = () => ({ ...SEISMIC_DEFAULTS, nodesPerSec: Math.max(1, +state.settings.seismic.nps || SEISMIC_DEFAULTS.nodesPerSec) });
+  delete state.settings.scenario; delete state.settings.seismic;   // settings that are gone
+  // seismic initiators run with SEISMIC_DEFAULTS (1000 nodes per game second; drills are not modelled)
+  const seisCfg = () => SEISMIC_DEFAULTS;
   let sim = null, paused = true, raf = 0, last = 0, acc = 0;
   const view = { cs: 8, ox: 0, oy: 0 };
   let fitted = false;
@@ -197,16 +194,8 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
   }, true);
   sizeSel.addEventListener("change", () => generate(state.world.seed ?? undefined));
 
-  // seismic row: manual break, node rate, drills (shown when the world has an initiator)
-  const seisRow = $(".wp-seis"), snps = $(".wp-snps"), sdrills = $(".wp-sdrills");
-  snps.value = state.settings.seismic.nps;
-  const resetIdle = () => { if (sim && (sim.status !== "run" || paused)) { reset(); onCurrent(null); } };
-  snps.addEventListener("change", () => { state.settings.seismic.nps = Math.max(1, Math.floor(+snps.value || SEISMIC_DEFAULTS.nodesPerSec)); snps.value = state.settings.seismic.nps; save(state); resetIdle(); update(); });
-  sdrills.addEventListener("change", () => {
-    const n = Math.max(0, Math.floor(+sdrills.value || 0));
-    for (const o of state.world.initiators || []) o.drills = n;
-    save(state); resetIdle(); update();
-  });
+  // seismic row: trigger a break by hand (shown when the world has an initiator)
+  const seisRow = $(".wp-seis");
   $(".wp-trig").addEventListener("click", () => {
     if (!sim) start();
     if (sim.triggerBreak) sim.triggerBreak();
@@ -257,9 +246,6 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
     const inits = state.world.initiators || [];
     seisRow.hidden = !inits.length;
     if (inits.length) {
-      if (document.activeElement !== sdrills) sdrills.value = inits[0].drills;
-      const busy = sim && sim.status === "run" && !paused;
-      sdrills.disabled = snps.disabled = busy;
       $(".wp-trig").disabled = !!(sim && sim.seismic && sim.seismic.list.every(o => o.state === "breaking"));
     }
   }
@@ -362,7 +348,7 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
       const parts = [t("seis." + o.state)];
       if (o.state === "working") parts.push(t("seis.countdown", fmtInt(o.left), fmtSec(o.left, nps)));
       if (o.state === "breaking") parts.push(t("seis.breakLeft", fmtInt(o.left), fmtSec(o.left, nps)));
-      parts.push(t("seis.mined", Math.floor(share * 100), Math.round(cfg.threshold * 100)), t("seis.drills", o.drills));
+      parts.push(t("seis.mined", Math.floor(share * 100), Math.round(cfg.threshold * 100)));
       return `<div class="wp-seisl ${o.state}"><b>${esc(t("seis.name", o.x, o.y))}</b>: ${parts.map(esc).join(" · ")}</div>`;
     }).join("");
   }
@@ -453,7 +439,7 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
       if (drag.stamped) return;
       drag.stamped = true;
       if (onInit >= 0) { w.initiators.splice(onInit, 1); if (!w.initiators.length) delete w.initiators; }
-      else if (!stampInitiator(w, x, y, 3)) { pickNote = t("sim.initBad"); renderHint(); return; }
+      else if (!stampInitiator(w, x, y)) { pickNote = t("sim.initBad"); renderHint(); return; }
       pickNote = ""; renderHint();
     } else if (state.settings.brush === "bot") {
       const bx = Math.min(w.W - 2, Math.max(1, x)), by = Math.min(w.H - 2, Math.max(1, y));

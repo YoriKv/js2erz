@@ -172,7 +172,7 @@ import { stampInitiator, initiatorAt, minedShare, SEISMIC_DEFAULTS } from "../sr
 // the seismic example's world: 128x96, an initiator on the bot's start, no impactite inside the disc
 function seismicWorld(seed) {
   const w = makeWorld(128, 96, seed);
-  stampInitiator(w, w.bot.x, w.bot.y, 3);
+  stampInitiator(w, w.bot.x, w.bot.y);
   for (let i = 0; i < w.cells.length; i++) if (w.cells[i] === "MetallicCrust") w.cells[i] = "SinterCrust";
   return w;
 }
@@ -181,7 +181,7 @@ function seismicWorld(seed) {
 function rockRoom(W = 90, H = 80) {
   const w = emptyWorld(W, H);
   for (let i = 0; i < w.cells.length; i++) if (w.cells[i] === "Back") w.cells[i] = "Regolith";
-  stampInitiator(w, 30, 30, 2);
+  stampInitiator(w, 30, 30);
   return w;
 }
 const idle = () => prog("m", [["pass", [1]]]);                // runs forever
@@ -213,7 +213,6 @@ test("seismic: starts working at the threshold, breaks after workSec * nodesPerS
   let s = createSim({ programs: progs(idle()), main: "m", world: w, seismic: { nodesPerSec: 2, workSec: 50, breakSec: 5 } });
   s.run(500);
   assert.equal(s.seismic.list[0].state, "idle", "below the threshold nothing happens");
-  assert.equal(s.seismic.list[0].drills, 2);
 
   const w2 = rockRoom(); w2.bot = w.bot;
   digDisc(w2, 0.81);
@@ -222,7 +221,7 @@ test("seismic: starts working at the threshold, breaks after workSec * nodesPerS
   assert.ok(o.share >= 0.8 && o.share < 0.82, `share ${o.share}`);
   assert.equal(s.seismic.workNodes, 100); assert.equal(s.seismic.breakNodes, 10);
   s.step();
-  assert.equal(o.state, "working"); assert.equal(o.drills, 1); assert.equal(o.left, 100);
+  assert.equal(o.state, "working"); assert.equal(o.left, 100);
   s.run(99);
   assert.equal(o.state, "working"); assert.equal(o.left, 1);
   s.step();
@@ -248,7 +247,7 @@ test("seismic: mining in the disc raises the share and triggers the initiator", 
 
 test("seismic: regrowth stays inside the disc and spares footprint and roads", () => {
   const w = emptyWorld(120, 100);                             // all open
-  stampInitiator(w, 50, 50, 1);
+  stampInitiator(w, 50, 50);
   w.cells[50 * w.W + 75] = "Road";
   w.bot = { x: 110, y: 90 };
   const s = createSim({ programs: progs(idle()), main: "m", world: w, seismic: { nodesPerSec: 1, seed: 5 } });
@@ -318,12 +317,7 @@ test("seismic: a bot standing on the initiator survives the break", () => {
   for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) assert.equal(cellAt(s.world, 30 + dx, 30 + dy), "Back");
 });
 
-test("seismic: no drills, no break; Block / Road can't go on the footprint", () => {
-  const w = rockRoom(); w.initiators[0].drills = 0; w.bot = { x: 80, y: 74 };
-  digDisc(w, 0.95);
-  const s = createSim({ programs: progs(idle()), main: "m", world: w, seismic: { nodesPerSec: 1 } });
-  s.run(50);
-  assert.equal(s.seismic.list[0].state, "idle");
+test("seismic: Block / Road can't go on the footprint", () => {
   const w2 = rockRoom(); w2.bot = { x: 30, y: 26 };          // just north of the footprint
   for (let y = 25; y <= 27; y++) for (let x = 29; x <= 31; x++) w2.cells[y * w2.W + x] = "Back";
   const p = prog("m", [["aimR", [2], { front: 3, right: 0 }], ["use", [null, null, null], { item: "Block" }]]);
@@ -345,7 +339,7 @@ test("seismic: worlds without an initiator behave as before", () => {
 
 test("seismic: an initiator placed on the bot's start", () => {
   const a = seismicWorld(9);
-  assert.deepEqual(a.initiators, [{ x: 64, y: 48, drills: 3 }]);
+  assert.deepEqual(a.initiators, [{ x: 64, y: 48 }]);
   assert.equal(initiatorAt(a, a.bot.x, a.bot.y), 0, "bot on the footprint");
   assert.ok(minedShare(a, a.initiators[0]) < 0.3);
 });

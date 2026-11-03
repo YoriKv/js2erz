@@ -240,13 +240,14 @@ export const cellAt = (w, x, y) => (x < 0 || y < 0 || x >= w.W || y >= w.H) ? "T
 // the radius are crushed.
 //
 // Model used here (the values marked unverified are guesses and can be changed through createSim's `seismic`):
-// - World: `world.initiators = [{ x, y, drills }]`, (x, y) = centre cell of the 5x5 footprint. The footprint cells are
+// - World: `world.initiators = [{ x, y }]`, (x, y) = centre cell of the 5x5 footprint. The footprint cells are
 //   open ground: a bot can stand and drive on them, there is nothing to dig, and SCAN sees the ground, not the
 //   building (programs cannot see buildings in the game). Blocks and roads cannot be placed on a footprint.
 // - Break centre: the footprint centre + `offset` (the game reports it one cell right of and below the centre).
 // - Mined share over the disc (distance <= radius, footprints left out): open cells / (open cells + diggable rock).
 //   Open = Back or Empty. Roads, blocks and walls count as neither; undiggable rock (MetallicCrust) counts as rock
 //   only with `countUndiggable` (unverified either way).
+// - Drills: not modelled, an initiator always has one (each working period would use one in the game).
 // - Time: the simulator counts nodes. One game second = `nodesPerSec` nodes (default 1000, a rough node rate), so the
 //   working period of `workSec` 603 s and the break of `breakSec` 10 s become node counts.
 // - Regrowth: every open cell in the disc refills up to `radius - fade` from the centre, fewer and fewer towards the
@@ -270,7 +271,7 @@ const onFootOf = (o, x, y) => Math.abs(x - o.x) <= FOOT && Math.abs(y - o.y) <= 
 export const initiatorAt = (w, x, y) => (w.initiators || []).findIndex(o => onFootOf(o, x, y));
 // place an initiator centred on (x, y): the footprint must lie inside the border and keep a 1-cell gap to other
 // buildings (as the game's placement rule). Clears the footprint to open ground (roads stay). Returns success.
-export function stampInitiator(w, x, y, drills = 3) {
+export function stampInitiator(w, x, y) {
   if (x - FOOT < 1 || y - FOOT < 1 || x + FOOT > w.W - 2 || y + FOOT > w.H - 2) return false;
   const list = w.initiators || (w.initiators = []);
   if (list.some(o => Math.abs(o.x - x) <= 2 * FOOT + 1 && Math.abs(o.y - y) <= 2 * FOOT + 1)) return false;
@@ -278,7 +279,7 @@ export function stampInitiator(w, x, y, drills = 3) {
     const i = (y + dy) * w.W + x + dx;
     if (w.cells[i] !== "Road") w.cells[i] = "Back";
   }
-  list.push({ x, y, drills });
+  list.push({ x, y });
   return true;
 }
 export const breakCentre = (o, cfg = SEISMIC_DEFAULTS) => [o.x + cfg.offset[0], o.y + cfg.offset[1]];
@@ -553,10 +554,10 @@ export function createSim({ programs, main, world, dir = 0, items = { RoadSector
     const workNodes = Math.max(1, Math.round(cfg.workSec * cfg.nodesPerSec));
     const breakNodes = Math.max(1, Math.round(cfg.breakSec * cfg.nodesPerSec));
     const rand = mulberry32(cfg.seed ?? ((w.seed ?? 0) * 7919 + 17));
-    w.initiators = world.initiators.map(o => ({ x: o.x, y: o.y, drills: o.drills ?? 0 }));
+    w.initiators = world.initiators.map(o => ({ x: o.x, y: o.y }));
     const list = w.initiators.map(o => {
       const [cx, cy] = breakCentre(o, cfg);
-      const it = { x: o.x, y: o.y, cx, cy, drills: o.drills, state: "idle", left: 0, open: 0, rock: 0, refilled: 0, plan: null, k: 0, elapsed: 0 };
+      const it = { x: o.x, y: o.y, cx, cy, state: "idle", left: 0, open: 0, rock: 0, refilled: 0, plan: null, k: 0, elapsed: 0 };
       Object.defineProperty(it, "share", { enumerable: true, get() { return it.open + it.rock ? it.open / (it.open + it.rock) : 0; } });
       discCells(w, o, cfg, (x, y) => { const k = shareClass(w.cells[y * w.W + x], cfg); if (k === 1) it.open++; else if (k === 2) it.rock++; });
       return it;
@@ -638,9 +639,9 @@ export function createSim({ programs, main, world, dir = 0, items = { RoadSector
         for (const o of list) {
           if (S.status !== "run") return;
           if (o.state === "idle") {
-            if (o.drills > 0 && o.share >= cfg.threshold) {
-              o.state = "working"; o.drills--; o.left = workNodes;
-              log(`Seismic initiator at (${o.x}, ${o.y}) started working: break in ${workNodes} nodes, ${o.drills} drills left`);
+            if (o.share >= cfg.threshold) {
+              o.state = "working"; o.left = workNodes;
+              log(`Seismic initiator at (${o.x}, ${o.y}) started working: break in ${workNodes} nodes`);
             }
           } else if (o.state === "working") {
             if (--o.left <= 0) startBreak(o, false);
