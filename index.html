@@ -48,18 +48,18 @@
         <button id="bFit" type="button" title="Show all (F)" data-i18n="hud.fit" data-i18n-title="hud.fitTip">Fit</button>
         <button id="bZoomIn" type="button" title="Zoom in" data-i18n-title="hud.zoomIn" data-i18n-aria="hud.zoomIn">+</button>
         <button id="bZoomOut" type="button" title="Zoom out" data-i18n-title="hud.zoomOut" data-i18n-aria="hud.zoomOut">−</button>
+        <span class="qhelp" tabindex="0" aria-label="Help" data-i18n-aria="hud.help">?<span class="qbox" id="graphHelp" role="tooltip"></span></span>
       </div>
+      <div id="inspector" class="tab" hidden></div>
       <nav id="palette" aria-label="Add a node" data-i18n-aria="aria.palette"></nav>
     </section>
     <div class="split" id="split2" role="separator" aria-label="Resize side panel" data-i18n-aria="aria.split2"></div>
     <aside id="side">
       <nav id="tabs" role="tablist">
-        <button type="button" data-tab="node" class="on" data-i18n="tab.node">Node</button>
-        <button type="button" data-tab="world" data-i18n="tab.world">Simulator</button>
+        <button type="button" data-tab="world" class="on" data-i18n="tab.world">Simulator</button>
         <button type="button" data-tab="ref" data-i18n="tab.ref">Reference</button>
       </nav>
-      <div class="tab" id="tab-node"></div>
-      <div class="tab" id="tab-world" hidden></div>
+      <div class="tab" id="tab-world"></div>
       <div class="tab" id="tab-ref" hidden></div>
     </aside>
   </div>

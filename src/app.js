@@ -238,7 +238,7 @@ function render() {
   vp = svg.querySelector("#vp"); simMark = svg.querySelector("#simMark");
   placeSimMark();
   const c = $("count");
-  c.textContent = t("hud.count", p.nodes.length, NODE_LIMIT);
+  c.textContent = t("hud.count", p.nodes.length, NODE_LIMIT) + (sel.size > 1 ? t("ins.selected", sel.size) : "");
   c.className = p.nodes.length > NODE_LIMIT ? "over" : "";
 }
 function setView(z) { view().view = z; if (vp) vp.setAttribute("transform", `translate(${z.x},${z.y}) scale(${z.z})`); }
@@ -484,8 +484,8 @@ document.addEventListener("keydown", e => {
 });
 
 // ---------------------------------------------------------------- side panel
-const sideTabs = ["node", "world", "ref"];
-let sideTab = "node";
+const sideTabs = ["world", "ref"];
+let sideTab = "world";
 $("tabs").addEventListener("click", e => {
   const b = e.target.closest("[data-tab]"); if (!b) return;
   sideTab = b.dataset.tab;
@@ -495,8 +495,8 @@ $("tabs").addEventListener("click", e => {
   renderSide();
 });
 function renderSide() {
-  if (sideTab === "node") renderInspector();
-  else if (sideTab === "ref") renderRef();
+  renderInspector();
+  if (sideTab === "ref") renderRef();
 }
 function el(tag, attrs = {}, ...kids) {
   const e = document.createElement(tag);
@@ -528,23 +528,20 @@ function operandInput(get, set, label) {
     onchange: () => edit(() => set(parseOperand(i.value))) });
   return el("div", { class: "row" }, el("span", { class: "lbl" }, label), i);
 }
+// the node editor floats over the canvas while one node or one arrow is selected
 function renderInspector() {
-  const box = $("tab-node"); box.innerHTML = "";
+  const box = $("inspector"); box.innerHTML = "";
   const v = view();
-  if (!v) { box.append(el("p", { class: "note" }, t("ins.empty"))); return; }
+  box.hidden = !v || !(selEdge || sel.size === 1);
+  if (box.hidden) return;
   const p = v.prog;
+  box.append(el("button", { type: "button", class: "close", title: t("ins.close"), "aria-label": t("ins.close"),
+    onclick: () => { sel.clear(); selEdge = null; render(); renderSide(); } }, "×"));
   const lbl = s => el("span", { class: "lbl" }, s);
   if (selEdge) {
     const a = p.nodes[selEdge.id], o = T[a.t].outs[selEdge.i];
     box.append(el("h2", {}, t("ins.arrow")), el("p", {}, t("ins.arrowText", a.id, nodeLabel(a.t), o[1], a.outs[selEdge.i])),
       el("div", { class: "row" }, el("button", { type: "button", onclick: () => deleteSelection() }, t("ins.disconnectDel"))));
-    return;
-  }
-  if (sel.size !== 1) {
-    box.append(el("h2", {}, p.name),
-      el("p", {}, `${t("n.nodes", p.nodes.length)}${sel.size ? t("ins.selected", sel.size) : ""}.`),
-      el("p", { class: "note" }, t("ins.hint")),
-      helpBlock());
     return;
   }
   const n = p.nodes[[...sel][0]], tp = T[n.t];
@@ -622,9 +619,10 @@ function renderInspector() {
   if (preds.length) box.append(el("div", { class: "sec" }, el("h3", {}, t("ins.comesFrom")),
     el("div", { class: "chips" }, ...preds.map(a => el("button", { type: "button", class: "link", onclick: () => { sel = new Set([a.id]); render(); renderSide(); } }, `#${a.id} ${nodeLabel(a.t)}`)))));
 }
-function helpBlock() {
-  return el("div", { class: "sec" }, el("h3", {}, t("ins.canvas")), el("p", { class: "note" }, t("ins.help")));
+function renderGraphHelp() {
+  $("graphHelp").replaceChildren(...["help.click", "help.hover", "help.view", "help.wire", "help.keys"].map(k => el("span", {}, t(k))));
 }
+renderGraphHelp();
 // "ROT ABS", "COMP / EQ" … from the reference table, in the UI language
 const LABEL_TYPE = Object.fromEntries(Object.entries(T).map(([k, v]) => [v.label, k]));
 const refNodeLabel = s => s.split(" / ").map(x => LABEL_TYPE[x] && x !== "." ? nodeLabel(LABEL_TYPE[x]) : x).join(" / ");
@@ -841,7 +839,7 @@ function applyStatic() {
 onLangChange(() => {
   $("langSel").value = getLang();
   closeModal();
-  applyStatic(); renderExamples(); renderFiles(); renderTabs(); renderPalette();
+  applyStatic(); renderExamples(); renderFiles(); renderTabs(); renderPalette(); renderGraphHelp();
   if (lastErr) renderDiag(null, lastErr); else if (lastRes) renderDiag(lastRes, null);
   if (!$("banner").hidden) showBanner();
   render(); renderSide();

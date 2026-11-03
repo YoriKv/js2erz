@@ -51,6 +51,18 @@ code, kbd { font-family: var(--f-mono); font-size: 12.5px; }
 #hud { position: absolute; right: 10px; top: 8px; display: flex; gap: 4px; align-items: center; }
 #count { font: 12px var(--f-mono); color: var(--muted); margin-right: 6px; }
 #count.over { color: var(--bad); }
+.qhelp { position: relative; width: 22px; height: 22px; margin-left: 4px; border-radius: 50%; border: 1px solid var(--line);
+  display: inline-flex; align-items: center; justify-content: center; color: var(--muted); font: 700 12px var(--f-title); cursor: help; background: var(--panel); }
+.qhelp:hover, .qhelp:focus { color: var(--accent); border-color: var(--accent); outline: none; }
+.qbox { display: none; position: absolute; top: calc(100% + 6px); right: 0; z-index: 30; width: 300px; flex-direction: column; gap: 5px;
+  padding: 8px 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; box-shadow: 0 4px 14px rgba(0, 0, 0, .5);
+  color: var(--fg); font: 400 12px/1.35 var(--f-body); text-align: left; cursor: default; }
+.qhelp:hover .qbox, .qhelp:focus .qbox { display: flex; }
+#inspector { position: absolute; right: 10px; top: 44px; width: 300px; max-height: calc(100% - 150px); z-index: 10; padding: 10px 12px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 6px 20px rgba(0, 0, 0, .45); }
+#inspector[hidden] { display: none; }
+#inspector .close { position: absolute; right: 6px; top: 6px; padding: 0 7px; font-size: 16px; line-height: 22px; }
+#inspector h2 { padding-right: 28px; }
 #hint { position: absolute; left: 10px; top: 10px; font-size: 12px; color: var(--muted); pointer-events: none; }
 #palette { position: absolute; left: 8px; right: 8px; bottom: 8px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; pointer-events: none; }
 #palette > * { pointer-events: auto; }
