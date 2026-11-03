@@ -144,7 +144,7 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
 
   const brushBar = $(".wp-brushes"), hint = $(".wp-hint");
   let pickNote = "";                 // eyedropper message that replaces the hint line until the next pick
-  const renderHint = () => { hint.textContent = pickNote || t("sim.alt"); };
+  const renderHint = () => { hint.textContent = pickNote || `${t("sim.alt")} ${t("sim.ctrl")}`; };
   function renderBrushes() {
     brushBar.innerHTML = BRUSHES.map(b => `<button type="button" class="wp-br${state.settings.brush === b.cell ? " on" : ""}" data-b="${b.cell}" title="Cell.${esc(b.cell)}"><span class="wp-sw" style="background:${b.color}"></span>${esc(brushLabel(b))}</button>`).join("")
       + `<button type="button" class="wp-br${state.settings.brush === "bot" ? " on" : ""}" data-b="bot" title="${esc(t("sim.botTip"))}"><span class="wp-sw" style="background:#414893"></span>${esc(t("sim.bot"))}</button>`
@@ -283,6 +283,15 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
       ctx.strokeStyle = "#3fbf5f"; ctx.lineWidth = Math.max(1.5, cs / 6);
       ctx.strokeRect(px(ax) + ctx.lineWidth / 2, py(ay) + ctx.lineWidth / 2, cs - ctx.lineWidth, cs - ctx.lineWidth);
     }
+    if (drag && drag.rect) {
+      const x0 = Math.min(drag.x0, drag.x1), y0 = Math.min(drag.y0, drag.y1);
+      const x1 = Math.max(drag.x0, drag.x1), y1 = Math.max(drag.y0, drag.y1);
+      ctx.fillStyle = cellColor(state.settings.brush); ctx.globalAlpha = 0.45;
+      ctx.fillRect(px(x0), py(y0), (x1 - x0 + 1) * cs, (y1 - y0 + 1) * cs);
+      ctx.globalAlpha = 1; ctx.strokeStyle = "#ffe4a3"; ctx.lineWidth = 2; ctx.setLineDash([5, 3]);
+      ctx.strokeRect(px(x0) - 1, py(y0) - 1, (x1 - x0 + 1) * cs + 2, (y1 - y0 + 1) * cs + 2);
+      ctx.setLineDash([]);
+    }
     if (altDown && hoverCell && hoverCell[0] >= 0 && hoverCell[1] >= 0 && hoverCell[0] < w.W && hoverCell[1] < w.H) {
       ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 2;
       ctx.strokeRect(px(hoverCell[0]) - 1, py(hoverCell[1]) - 1, cs - gap + 2, cs - gap + 2);
@@ -388,6 +397,26 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
   window.addEventListener("keyup", onKey);
   window.addEventListener("blur", () => setAlt(false));
   let drag = null;
+  // one cell with a cell brush; the bot's body and initiator footprints only take Back or Road
+  function setCell(w, x, y, brush) {
+    if (x < 0 || y < 0 || x >= w.W || y >= w.H) return false;
+    const ab = w.bot;
+    if ((initiatorAt(w, x, y) >= 0 || (Math.abs(x - ab.x) <= 1 && Math.abs(y - ab.y) <= 1)) && !["Back", "Road"].includes(brush)) return false;
+    w.cells[y * w.W + x] = brush;
+    return true;
+  }
+  const isCellBrush = () => !["bot", "initiator"].includes(state.settings.brush);
+  // Ctrl+drag: fill the rectangle between the press and the release
+  function fillRect(r) {
+    const w = state.world;
+    if (sim) { if (sim.status === "run" && !paused) return; reset(); onCurrent(null); }
+    const x0 = Math.max(0, Math.min(r.x0, r.x1)), x1 = Math.min(w.W - 1, Math.max(r.x0, r.x1));
+    const y0 = Math.max(0, Math.min(r.y0, r.y1)), y1 = Math.min(w.H - 1, Math.max(r.y0, r.y1));
+    let n = 0;
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (setCell(w, x, y, state.settings.brush)) n++;
+    if (n) save(state);
+    draw(); renderInfo(); updSeis();
+  }
   function paint(e) {
     const [x, y] = cellOf(e), w = state.world;
     if (x < 0 || y < 0 || x >= w.W || y >= w.H) return;
@@ -404,11 +433,7 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
       const bx = Math.min(w.W - 2, Math.max(1, x)), by = Math.min(w.H - 2, Math.max(1, y));
       w.bot = { x: bx, y: by };
       for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) w.cells[(by + dy) * w.W + bx + dx] = "Back";
-    } else {
-      const ab = w.bot;
-      if ((onInit >= 0 || (Math.abs(x - ab.x) <= 1 && Math.abs(y - ab.y) <= 1)) && !["Back", "Road"].includes(state.settings.brush)) return;   // keep the body and footprints free
-      w.cells[y * w.W + x] = state.settings.brush;
-    }
+    } else if (!setCell(w, x, y, state.settings.brush)) return;
     drag.dirty = true;
     draw(); renderInfo(); updSeis();
   }
@@ -419,6 +444,12 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
     if (e.button === 1 || e.button === 2) { drag = { pan: true, x: e.clientX, y: e.clientY, ox: view.ox, oy: view.oy }; e.preventDefault(); return; }
     if (e.button !== 0) return;
     if (sim && sim.status === "run" && !paused) return;
+    if ((e.ctrlKey || e.metaKey) && isCellBrush()) {
+      e.preventDefault();
+      const [x, y] = cellOf(e);
+      drag = { rect: true, x0: x, y0: y, x1: x, y1: y };
+      draw(); return;
+    }
     drag = { pan: false }; paint(e);
   });
   cv.addEventListener("pointermove", e => {
@@ -427,9 +458,16 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
     if (e.altKey !== altDown) setAlt(e.altKey); else if (altDown && moved) draw();
     if (!drag) return;
     if (drag.pan) { view.ox = drag.ox + e.clientX - drag.x; view.oy = drag.oy + e.clientY - drag.y; draw(); }
+    else if (drag.rect) { if (moved) { drag.x1 = hc[0]; drag.y1 = hc[1]; draw(); } }
     else paint(e);
   });
-  const endDrag = () => { if (drag && drag.dirty) save(state); drag = null; };
+  const endDrag = e => {
+    if (drag && drag.rect && e && e.type === "pointerup") { const r = drag; drag = null; fillRect(r); return; }
+    if (drag && drag.dirty) save(state);
+    const wasRect = drag && drag.rect;
+    drag = null;
+    if (wasRect) draw();
+  };
   cv.addEventListener("pointerup", endDrag);
   cv.addEventListener("pointercancel", endDrag);
   cv.addEventListener("wheel", e => {
