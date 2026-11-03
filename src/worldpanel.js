@@ -93,6 +93,7 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
     </div>
     <div class="wp-row wp-seis" hidden>
       <button type="button" class="wp-trig" data-k="seis.trigger" data-kt="seis.triggerTip"></button>
+      <label class="wp-l" data-kt="seis.npsTip"><input class="wp-snps" type="number" min="1" step="1" style="width:72px"> <span data-k="seis.nps"></span></label>
     </div>
     <div class="wp-row wp-items">${SIM_ITEMS.map(it => `<label class="wp-l"><span data-item-label="${it}"></span> <input type="number" min="0" step="1" data-item="${it}" style="width:56px"></label>`).join("")}</div>
     <div class="wp-info" aria-live="polite"></div>`;
@@ -112,11 +113,14 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
   const stored = load();
   const state = {
     world: stored?.world && stored.world.cells?.length === stored.world.W * stored.world.H ? stored.world : makeWorld(96, 72),
-    settings: Object.assign({ dir: 0, speed: 40, brush: "Regolith", items: { RoadSector: 20, Block: 20, MiningCharge: 5 } }, stored?.settings || {}),
+    settings: Object.assign({ dir: 0, speed: 40, brush: "Regolith", items: { RoadSector: 20, Block: 20, MiningCharge: 5 },
+      seismic: { nps: SEISMIC_DEFAULTS.nodesPerSec } }, stored?.settings || {}),
   };
-  delete state.settings.scenario; delete state.settings.seismic;   // settings that are gone
-  // seismic initiators run with SEISMIC_DEFAULTS (1000 nodes per game second; drills are not modelled)
-  const seisCfg = () => SEISMIC_DEFAULTS;
+  delete state.settings.scenario;   // the scenario select is gone
+  if (!state.settings.seismic || typeof state.settings.seismic !== "object") state.settings.seismic = { nps: SEISMIC_DEFAULTS.nodesPerSec };
+  delete state.settings.seismic.drills;
+  // seismic initiators run with SEISMIC_DEFAULTS and the chosen node rate (drills are not modelled)
+  const seisCfg = () => ({ ...SEISMIC_DEFAULTS, nodesPerSec: Math.max(1, +state.settings.seismic.nps || SEISMIC_DEFAULTS.nodesPerSec) });
   let sim = null, paused = true, raf = 0, last = 0, acc = 0;
   const view = { cs: 8, ox: 0, oy: 0 };
   let fitted = false;
@@ -195,7 +199,14 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
   sizeSel.addEventListener("change", () => generate(state.world.seed ?? undefined));
 
   // seismic row: trigger a break by hand (shown when the world has an initiator)
-  const seisRow = $(".wp-seis");
+  const seisRow = $(".wp-seis"), snps = $(".wp-snps");
+  snps.value = seisCfg().nodesPerSec;
+  snps.addEventListener("change", () => {
+    state.settings.seismic.nps = Math.max(1, Math.floor(+snps.value || SEISMIC_DEFAULTS.nodesPerSec));
+    snps.value = state.settings.seismic.nps; save(state);
+    if (sim && (sim.status !== "run" || paused)) { reset(); onCurrent(null); }   // takes effect from the next run
+    update();
+  });
   $(".wp-trig").addEventListener("click", () => {
     if (!sim) start();
     if (sim.triggerBreak) sim.triggerBreak();
@@ -246,6 +257,7 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
     const inits = state.world.initiators || [];
     seisRow.hidden = !inits.length;
     if (inits.length) {
+      snps.disabled = !!(sim && sim.status === "run" && !paused);
       $(".wp-trig").disabled = !!(sim && sim.seismic && sim.seismic.list.every(o => o.state === "breaking"));
     }
   }
