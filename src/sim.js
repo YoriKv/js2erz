@@ -229,7 +229,8 @@ export function createSim({ programs, main, world, dir = 0, items = { RoadSector
       case "aim_right": return num(a.rel ? a.right : 0);
       case "aim_front": return num(a.rel ? a.front : 0);
       case "auto_attack_miners": case "auto_attack_mobs": case "auto_war": return num(S.autos[name]);
-      case "scan_cell_front": return { t: "c", v: cellAt(w, b.x + 2 * fw[0], b.y + 2 * fw[1]) };
+      // SCAN stores the aimed cell (as in the game); before the first SCAN, the cell 2 ahead
+      case "scan_cell_front": return { t: "c", v: S.scanFront ?? cellAt(w, b.x + 2 * fw[0], b.y + 2 * fw[1]) };
       case "scan_cell_back": return { t: "c", v: cellAt(w, b.x - 2 * fw[0], b.y - 2 * fw[1]) };
       default: return BUILTIN_VARS.includes(name) ? num(0) : undefined;
     }
@@ -278,7 +279,7 @@ export function createSim({ programs, main, world, dir = 0, items = { RoadSector
       case "movedig": return tryMove() ? 0 : strike() === 0 ? 1 : 2;
       case "aimA": S.aim = { rel: false, front: p.front, right: p.right }; return 0;
       case "aimR": S.aim = { rel: true, front: p.front, right: p.right }; return 0;
-      case "scan": { const [x, y] = aimWorld(); return (CATEGORY_CELLS[p.category] || []).includes(cellAt(w, x, y)) ? 0 : 1; }
+      case "scan": { const [x, y] = aimWorld(), c = cellAt(w, x, y); S.scanFront = c; return (CATEGORY_CELLS[p.category] || []).includes(c) ? 0 : 1; }
       case "use": {
         const it = p.item;
         if (!(it in ITEM_FX)) { log(`USE ${it}: not simulated`); return 2; }

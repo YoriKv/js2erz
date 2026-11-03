@@ -180,3 +180,47 @@ test("nodes that lie in no reachable path are dropped", () => {
   assert.deepEqual(types(r.programs[0]), ["start", "move"]);
   assert.match(r.warnings[0].msg, /unreachable/);
 });
+
+// ---------------------------------------------------------------- regressions from the generator comparison
+test("variable arguments are copied when the call can change them", () => {
+  assert.equal(run(`let n = 1; function bump() { n = n + 1; } function f(a) { bump(); return a; } let r = f(n);`).vars("r"), 1);
+  assert.equal(run(`function movedFrom(x0) { step(); return x != x0; } let moved = 0; if (movedFrom(x)) moved = 1;`).vars("moved"), 1);
+  // rnd changes on every read: it is copied once, so the comparison is v == v, not rnd == rnd
+  const src = `function same(v) { return v == v; } let s = 0; if (same(rnd)) s = 1;`;
+  const eq = compile(src).programs[0].nodes.find(n => n.t === "eq");
+  assert.notEqual(eq.p.value.var, "rnd");
+  assert.equal(run(src).vars("s"), 1);
+});
+
+test("a let without an initialiser starts at 0 on every entry", () => {
+  assert.equal(run(`let n = 0; for (let i = 0; i < 2; i++) { let f; if (i == 0) f = 1; if (f) n++; }`).vars("n"), 1);
+  assert.equal(run(`let g; let k = 0; if (g) k = 1;`).vars("k"), 0);
+});
+
+test("switch on a compile-time constant is folded", () => {
+  const p = compile(`for (const d of [0, 1]) { switch (d) { case 0: turnLeft(); break; case 1: turnRight(); break; } }`).programs[0];
+  assert.deepEqual(types(p), ["start", "rotR", "rotR"]);
+  assert.deepEqual(p.nodes.slice(1).map(n => n.p.dir), [-2, 2]);
+  const q = compile(`const K = 2; switch (K) { case 1: turnLeft(); case 2: turnRight(); case 3: turnAround(); break; default: step(); }`).programs[0];
+  assert.deepEqual(q.nodes.slice(1).map(n => n.p.dir), [2, 4]);   // fallthrough from case 2 into case 3
+});
+
+test("constant-folded branches leave no unreachable-code warnings", () => {
+  for (const src of [
+    `for (const d of [0, 1]) { if (d == 0) turnLeft(); else turnRight(); }`,
+    `function f(k) { if (k) turnLeft(); else turnRight(); }\nf(1);\nf(0);`,
+    `const A = 1; let v = A ? x : y; A > 2 && step(); while (false) step();`,
+  ]) assert.deepEqual(compile(src).warnings, [], src);
+  assert.match(compile(`halt(); step();`).warnings[0].msg, /unreachable/);   // real dead code still warns
+});
+
+test("a program can't return a value", () => {
+  assert.throws(() => compile(`function F() { "use program"; return 5; } let v = F();`), /can't return a value/);
+  assert.doesNotThrow(() => compile(`function F() { "use program"; return true; } function G() { "use program"; return step(); } F(); G();`));
+});
+
+test("SCAN stores the aimed cell in scan_cell_front", () => {
+  const { vars } = run(`aim(0, 3); scan(Category.Diggable); let ore = 0; if (scan_cell_front == Cell.DenseOre) ore = 1;`,
+    { paint: w => fill(w, 4, 4, 10, 10, "DenseOre") });   // bot (4,7) facing east: right 3 = (4,10)
+  assert.equal(vars("ore"), 1);
+});

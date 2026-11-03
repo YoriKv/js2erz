@@ -378,6 +378,8 @@ class Compiler {
       }
       case "VariableDeclaration": return this.varDecl(s);
       case "IfStatement": {
+        const k = this.constEval(s.test);
+        if (k) { const br = truthy(k) ? s.consequent : s.alternate; if (br) this.stmt(br); return; }
         const c = this.cond(s.test);
         b.pending = c.t; this.stmt(s.consequent);
         const after = b.pending;
@@ -386,6 +388,7 @@ class Compiler {
         return;
       }
       case "WhileStatement": {
+        { const k = this.constEval(s.test); if (k && !truthy(k)) return; }
         const head = new Label();
         b.place(head);
         const c = this.cond(s.test);
@@ -412,6 +415,7 @@ class Compiler {
       case "ForStatement": {
         this.pushScope();
         if (s.init) { if (s.init.type === "VariableDeclaration") this.varDecl(s.init); else this.exprStmt(s.init); }
+        { const k = s.test && this.constEval(s.test); if (k && !truthy(k)) { this.popScope(); return; } }
         const head = new Label(), cont = new Label();
         b.place(head);
         const c = s.test ? this.cond(s.test) : { t: b.pending, f: [] };
@@ -488,6 +492,7 @@ class Compiler {
       const existing = this.scope.map.get(name);
       const bind = existing && existing.kind === "var" ? existing : this.bindVar(this.scope, name, d);
       if (d.init) this.assignTo(bind.name, d.init, d);
+      else if (!existing) this.emitAssign(bind.name, { num: 0 }, d);   // JS: undefined (falsy) on every entry
     }
   }
 
@@ -513,6 +518,8 @@ class Compiler {
   switchStmt(s) {
     const b = this.b;
     const cases = s.cases;
+    const kd = this.constEval(s.discriminant);
+    if (kd) return this.switchConst(s, kd);
     const caseRefs = cases.map(() => []);
     let rest;
     const outcome = this.outcomeSource(s.discriminant);
@@ -547,6 +554,28 @@ class Compiler {
       if (v) return constOperand(v, c);
       return this.value(c);
     });
+  }
+  switchConst(s, kd) {
+    const b = this.b, cases = s.cases;
+    let start = cases.findIndex(c => {
+      if (!c.test) return false;
+      const v = this.constEval(c.test);
+      if (!v) fail("a switch on a constant needs constant cases", c.test);
+      return v.k === kd.k && v.v === kd.v;
+    });
+    if (start < 0) start = cases.findIndex(c => !c.test);
+    if (start < 0) return;
+    const loop = { node: s, breaks: [], contRefs: [], label: this.nextLabel || null, switch: true };
+    this.nextLabel = null;
+    this.loops.push(loop);
+    this.pushScope();
+    for (let k = start; k < cases.length; k++) {
+      this.block(cases[k].consequent);
+      if (!b.pending.length) break;     // break (or halt): the later cases are not reached
+    }
+    this.popScope();
+    this.loops.pop();
+    b.pending = b.pending.concat(loop.breaks);
   }
   switchOnValue(s, val, caseOperand) {
     const b = this.b;
@@ -591,6 +620,11 @@ class Compiler {
     if (ctx.kind === "program") {
       // return in a program = EXIT (SUCCESS unless the value is falsy)
       if (!s.argument) { this.exitNode(false, s); return; }
+      const k = this.constEval(s.argument);
+      if (k && !(k.k === "num" && (k.v === 0 || k.v === 1) && s.argument.type === "Literal" && typeof s.argument.value === "boolean"))
+        fail("a program can't return a value: return true / false (EXIT SUCCESS / FAIL), or a condition", s.argument);
+      if (!k && !isCondExpr(s.argument) && !["CallExpression", "Identifier"].includes(s.argument.type))
+        fail("a program can't return a value: return true / false (EXIT SUCCESS / FAIL), or a condition", s.argument);
       const c = this.cond(s.argument);
       b.pending = c.t; this.exitNode(false, s);
       b.pending = c.f; this.exitNode(true, s);
@@ -627,6 +661,12 @@ class Compiler {
       case "LogicalExpression": case "ConditionalExpression": {
         // a && b(); used as a statement
         const test = e.type === "LogicalExpression" ? e.left : e.test;
+        const k = this.constEval(test);
+        if (k) {
+          if (e.type === "ConditionalExpression") return this.exprStmt(truthy(k) ? e.consequent : e.alternate);
+          if ((e.operator === "&&") === truthy(k)) return this.exprStmt(e.right);
+          return;
+        }
         const c = this.cond(test);
         if (e.type === "LogicalExpression") {
           b.pending = e.operator === "&&" ? c.t : c.f; this.exprStmt(e.right);
@@ -814,11 +854,13 @@ class Compiler {
       const c = this.constEval(a);
       if (c && !assigned.has(pname)) { scope.map.set(pname, { kind: "const", value: c }); return; }
       if (a.type === "ArrowFunctionExpression" || a.type === "FunctionExpression") { this.declareFn(pname, a, scope, a); return; }
-      if (a.type === "Identifier" && !assigned.has(pname) && !assignsOuter(fn.body)) {
+      if (a.type === "Identifier") {
         const ab = this.scope.lookup(a.name);
         if (ab && (ab.kind === "fn" || ab.kind === "prog" || ab.kind === "const")) { scope.map.set(pname, ab); return; }
-        if (ab && ab.kind === "var") { scope.map.set(pname, ab); return; }
-        if (!ab && BUILTIN_VARS.includes(a.name)) { scope.map.set(pname, { kind: "var", name: a.name }); return; }
+        // a plain variable can be shared (no copy) only if the call can't change it: the parameter is never assigned,
+        // the body assigns no outer variable and calls no user function. System variables always get a copy
+        // (x, y, dir, rnd, scan_* change as the program runs).
+        if (ab && ab.kind === "var" && !assigned.has(pname) && !assignsOuter(fn.body) && !callsUserFn(fn.body)) { scope.map.set(pname, ab); return; }
       }
       pendingBinds.push([pname, a]);
     });
@@ -920,6 +962,8 @@ class Compiler {
   }
   ternaryInto(target, e) {
     const b = this.b;
+    const k = this.constEval(e.test);
+    if (k) { this.assignTo(target, truthy(k) ? e.consequent : e.alternate, e); return; }
     const c = this.cond(e.test);
     b.pending = c.t; this.assignTo(target, e.consequent, e.consequent); const a = b.pending;
     b.pending = c.f; this.assignTo(target, e.alternate, e.alternate);
@@ -1160,6 +1204,14 @@ function assignsOuter(body) {
     if (id && id.type === "Identifier" && !local.has(id.name)) outer = true;
   });
   return outer;
+}
+function callsUserFn(body) {
+  let found = false;
+  walk(body, n => {
+    if (n.type === "CallExpression" && n.callee.type === "Identifier" &&
+      !OUTCOME_FUNS.has(n.callee.name) && !ACTION_FUNS.has(n.callee.name) && !SPECIAL_FUNS.has(n.callee.name)) found = true;
+  });
+  return found;
 }
 function walk(n, fn) {
   if (!n || typeof n.type !== "string") return;
