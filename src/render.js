@@ -14,7 +14,9 @@ function bezier(x1, y1, x2, y2) {
   return `M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}`;
 }
 function roundPath(pts, r = 10) {
-  pts = pts.filter((p, k) => k === 0 || Math.hypot(p[0] - pts[k - 1][0], p[1] - pts[k - 1][1]) > 0.5);
+  const kept = [];   // drop points that (nearly) coincide with the last kept one
+  for (const p of pts) if (!kept.length || Math.hypot(p[0] - kept[kept.length - 1][0], p[1] - kept[kept.length - 1][1]) > 0.5) kept.push(p);
+  pts = kept;
   let d = `M${pts[0][0]},${pts[0][1]}`;
   for (let k = 1; k < pts.length - 1; k++) {
     const [px, py] = pts[k - 1], [cx, cy] = pts[k], [nx, ny] = pts[k + 1];
@@ -35,13 +37,19 @@ function smoothThrough(pts) {
   return d;
 }
 // Edges that go backwards (loops) run around the nodes they would cross, above or below.
+// The router keeps the extent of everything it routed in `ext`, so graphBounds can include the loops.
 function makeRouter(prog) {
   const boxes = prog.nodes.map(n => { const [w, h] = sizePx(n); return [n.x * U, n.y * U, n.x * U + w, n.y * U + h]; });
   const lanesUsed = [];
-  return function backPath(a, i, b) {
+  const ext = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+  const path = pts => {
+    for (const [x, y] of pts) { ext.x0 = Math.min(ext.x0, x); ext.y0 = Math.min(ext.y0, y); ext.x1 = Math.max(ext.x1, x); ext.y1 = Math.max(ext.y1, y); }
+    return roundPath(pts);
+  };
+  const backPath = function (a, i, b) {
     const [x1, y1] = portPos(a, i), [x2, y2] = inPos(b), s = 12 + i * 6;
     const lo = Math.min(x2 - 16, x1), hi = Math.max(x1 + s, x2);
-    if (a === b) return roundPath([[x1, y1], [x1 + s, y1], [x1 + s, a.y * U - 12 - i * 6], [x2 - 16, a.y * U - 12 - i * 6], [x2 - 16, y2], [x2, y2]]);
+    if (a === b) return path([[x1, y1], [x1 + s, y1], [x1 + s, a.y * U - 12 - i * 6], [x2 - 16, a.y * U - 12 - i * 6], [x2 - 16, y2], [x2, y2]]);
     // obstacles: nodes in the x range that form one vertical cluster with the two ends (other bands stay out)
     let top = Math.min(y1, y2), bot = Math.max(y1, y2);
     const inX = boxes.filter(([bx0, , bx1]) => bx1 > lo && bx0 < hi);
@@ -58,8 +66,21 @@ function makeRouter(prog) {
       lane += above ? -7 : 7;
     }
     lanesUsed.push({ y: lane, lo, hi });
-    return roundPath([[x1, y1], [x1 + s, y1], [x1 + s, lane], [x2 - 16, lane], [x2 - 16, y2], [x2, y2]]);
+    return path([[x1, y1], [x1 + s, y1], [x1 + s, lane], [x2 - 16, lane], [x2 - 16, y2], [x2, y2]]);
   };
+  backPath.ext = ext;
+  return backPath;
+}
+// Calls fn(a, i, b, d) for every drawn edge, in drawing order (the router's lane allocation depends on it); returns the router.
+function forEachEdge(prog, routes, fn) {
+  const byId = new Map(prog.nodes.map(n => [n.id, n]));
+  const router = makeRouter(prog);
+  for (const a of prog.nodes) a.outs.forEach((tid, i) => {
+    if (tid == null) return;
+    const b = byId.get(tid); if (!b) return;
+    fn(a, i, b, edgePath(prog, a, i, b, routes, router));
+  });
+  return router;
 }
 export function edgePath(prog, a, i, b, routes, router) {
   const [x1, y1] = portPos(a, i), [x2, y2] = inPos(b);
@@ -110,11 +131,13 @@ export const EN_LABELS = {
 function tokenLine(tokens, cx, y, w, size = 19) {
   const chars = tokens.reduce((a, [s]) => a + String(s ?? "?").length + 1, 0);
   const fs = Math.max(11, Math.min(size, Math.floor((w - 14) / (chars * 0.56))));
+  // still too wide at the minimum size: squeeze to the node width
+  const squeeze = chars * fs * 0.56 > w - 14 ? ` textLength="${Math.floor(w - 14)}" lengthAdjust="spacingAndGlyphs"` : "";
   const tsp = tokens.map(([s, kind]) => {
     const fill = s == null ? BAD : kind === "v" ? V_COL : kind === "c" ? C_COL : kind === "o" ? "#F2EBDD" : TITLE;
     return `<tspan fill="${fill}">${esc(s == null ? "?" : s)}</tspan>`;
   }).join(" ");
-  return `<text x="${cx}" y="${y}" font-size="${fs}" font-weight="600" text-anchor="middle" dominant-baseline="central" stroke="#0d0f13" stroke-width="3" stroke-linejoin="round" paint-order="stroke">${tsp}</text>`;
+  return `<text x="${cx}" y="${y}"${squeeze} font-size="${fs}" font-weight="600" text-anchor="middle" dominant-baseline="central" stroke="#0d0f13" stroke-width="3" stroke-linejoin="round" paint-order="stroke">${tsp}</text>`;
 }
 const tok = o => o == null ? [null, "v"] : o.var != null ? [o.var, "v"] : [fmtOperand(o), "c"];
 
@@ -141,7 +164,7 @@ function drill(cx, cy, st, k = 1) {
 }
 // 7x7 aim grid: bot body in the middle, target cell highlighted
 function aimGrid(n, cx, cy) {
-  const p = n.p, rel = n.t === "aimR", cs = 6, o = cx - 3.5 * cs, oy = cy - 3.5 * cs;
+  const p = n.p || {}, rel = n.t === "aimR", cs = 6, o = cx - 3.5 * cs, oy = cy - 3.5 * cs;
   let s = "";
   for (let r = 0; r < 7; r++) for (let c = 0; c < 7; c++) {
     const gx = c - 3, gy = r - 3, body = Math.abs(gx) <= 1 && Math.abs(gy) <= 1;
@@ -220,7 +243,7 @@ function nodeSvg(n, index, o) {
   if (o.current === n.id) g += `<rect x="-7" y="-7" width="${w + 14}" height="${h + 14}" fill="none" stroke="#3fbf5f" stroke-width="4" rx="4"/>`;
   if (o.sel && o.sel.has(n.id)) g += `<rect x="-5" y="-5" width="${w + 10}" height="${h + 10}" fill="none" stroke="${TITLE}" stroke-width="2" stroke-dasharray="6 4" rx="3"/>`;
   if (o.hl && o.hl.has(n.id)) g += `<rect x="-5" y="-5" width="${w + 10}" height="${h + 10}" fill="${TITLE}" fill-opacity=".12" stroke="#7fb4ff" stroke-width="2.5" rx="3"/>`;
-  const edgeCol = n.t === "exit" ? (n.p.fail ? "#D93A35" : "#1FA246") : t.bg;
+  const edgeCol = n.t === "exit" ? ((n.p || {}).fail ? "#D93A35" : "#1FA246") : t.bg;
   g += `<rect width="${w}" height="${h}" fill="${t.body || shade(t.bg, 0.45)}"/>`;
   if (!small) g += `<rect width="${w}" height="${HDR}" fill="${t.bg}"/>`;
   g += `<rect x="1" y="1" width="${w - 2}" height="${h - 2}" fill="none" stroke="${edgeCol}" stroke-width="2"/>`;
@@ -256,16 +279,12 @@ export function arrowDefs(prefix = "") {
 // o: {routes, sel, selEdge, current, hl, activePort, interactive, prefix, labels}
 export function graphSvg(prog, o = {}) {
   const prefix = o.prefix || "";
-  const byId = new Map(prog.nodes.map(n => [n.id, n]));
   const index = new Map(prog.nodes.map((n, i) => [n.id, i]));
   const linked = new Set();
   prog.nodes.forEach(a => a.outs.forEach(t => { if (t != null) linked.add(t); }));
-  const router = makeRouter(prog);
   let edges = "", hits = "";
-  for (const a of prog.nodes) a.outs.forEach((tid, i) => {
-    if (tid == null) return;
-    const b = byId.get(tid); if (!b) return;
-    const col = (T[a.t].outs[i] || [0, 0, COL.w])[2], d = edgePath(prog, a, i, b, o.routes, router);
+  forEachEdge(prog, o.routes, (a, i, b, d) => {
+    const col = (T[a.t].outs[i] || [0, 0, COL.w])[2];
     const isSel = o.selEdge && o.selEdge.id === a.id && o.selEdge.i === i;
     edges += `<path d="${d}" fill="none" stroke="${col}" stroke-width="${isSel ? 4 : 2.6}" stroke-opacity="${isSel ? 1 : 0.9}" marker-end="url(#${prefix}ah-${colKey(col)})"/>`;
     if (o.interactive) hits += `<path data-edge="${a.id}:${i}" d="${d}" fill="none" stroke="transparent" stroke-width="12" style="cursor:pointer"/>`;
@@ -282,6 +301,9 @@ export function graphBounds(prog, routes) {
     x0 = Math.min(x0, n.x * U); y0 = Math.min(y0, n.y * U); x1 = Math.max(x1, n.x * U + w + 44); y1 = Math.max(y1, n.y * U + h);
   }
   if (routes) for (const r of routes.values()) for (const [x, y] of (r.poly ? r.pts : r)) { x0 = Math.min(x0, x - 10); y0 = Math.min(y0, y - 10); x1 = Math.max(x1, x + 10); y1 = Math.max(y1, y + 10); }
+  // loops routed by the renderer around the nodes (same router run as graphSvg, so the same lanes)
+  const e = forEachEdge(prog, routes, () => {}).ext;
+  if (e.y0 <= e.y1) { x0 = Math.min(x0, e.x0 - 10); y0 = Math.min(y0, e.y0 - 10); x1 = Math.max(x1, e.x1 + 10); y1 = Math.max(y1, e.y1 + 10); }
   return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
 }
 // standalone SVG document for export

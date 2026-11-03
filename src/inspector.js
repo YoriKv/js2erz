@@ -1,8 +1,8 @@
-// Node editor: mirrors the game's Programmator node inspector (erz.ui.NodeInspector).
+// Node editor: mirrors the game's node inspector for Programmator nodes.
 // Frame: title bar in the node colour, description, the per-type controls, then the outputs and DELETE.
 // Text fields follow the game: numbers ^[+-]?\d+(\.\d+)?$, names 1..20 of [a-zA-Z0-9_] (no leading digit),
 // cells as C.<Cell>; invalid text turns red and keeps the old value; typing commits without rebuilding the panel.
-import { T, DIR_ARROW, CATEGORIES, CELLS, ITEMS, BUILTIN_VARS, TITLE } from "./nodes.js";
+import { T, DIR_ARROW, CATEGORIES, CELLS, ITEMS, BUILTIN_VARS, WRITABLE_BUILTINS, TITLE } from "./nodes.js";
 import { t, tOr, has } from "./i18n.js";
 
 const NUM_RX = /^[+-]?\d+(?:\.\d+)?$/;
@@ -12,7 +12,6 @@ const SERVICE_CELLS = new Set(["Unknown", "Service", "ServiceWalkableCorner", "S
   "ServiceDiggableWalkableCorner", "Darkness", "ServiceHiddenEmpty"]);
 const CELL_CONSTS = CELLS.filter(c => !SERVICE_CELLS.has(c)).map(c => "C." + c);
 const CELL_VARS = ["scan_cell_front", "scan_cell_back"];
-const ASSIGNABLE = ["aim_x", "aim_y", "aim_rel", "aim_front", "aim_right", "auto_war", "auto_attack_mobs", "auto_attack_miners"];
 const HIDDEN_CATS = new Set(["Bombable", "Extractable", "Pushable", "Falling", "Damaging"]);
 const REL_BTNS = [[4, "180°"], [-3, "-135°"], [-2, "-90°"], [-1, "-45°"], [1, "+45°"], [2, "+90°"], [3, "+135°"]];   // our REL 180° is 4
 const OP_LIST = [["Plus", "+"], ["Minus", "−"], ["Mult", "×"], ["Div", "÷"], ["Mod", "%"]];
@@ -69,7 +68,8 @@ export function createInspector(ctx) {
       if (opts.name !== false && NAME_RX.test(s)) return BUILTIN_VARS.includes(s) ? COLOR.sys : "";
       return null;
     };
-    inp.style.color = colorFor(opts.value, true) || "";
+    // an invalid stored value (a name over 20 characters, a missing operand) shows red; an allowed empty field stays plain
+    inp.style.color = opts.value === "" && opts.empty ? "" : colorFor(opts.value, true) ?? COLOR.bad;
     inp.addEventListener("focus", () => { typedSnap = false; showSugg(inp, opts.slot); });
     inp.addEventListener("blur", () => setTimeout(() => { if (S && S.field === inp && document.activeElement !== inp) hideSugg(); }, 150));
     inp.addEventListener("input", () => {
@@ -111,7 +111,7 @@ export function createInspector(ctx) {
       return [...hit.filter(c => c.slice(2).toLowerCase().startsWith(rest)), ...hit.filter(c => !c.slice(2).toLowerCase().startsWith(rest))];
     }
     const pool = slot === "number" ? BUILTIN_VARS.filter(v => !CELL_VARS.includes(v)) : slot === "cell" ? CELL_VARS
-      : slot === "assignable" ? BUILTIN_VARS.filter(v => ASSIGNABLE.includes(v)) : BUILTIN_VARS;
+      : slot === "assignable" ? BUILTIN_VARS.filter(v => WRITABLE_BUILTINS.includes(v)) : BUILTIN_VARS;
     const hit = pool.filter(v => v.toLowerCase().includes(lc));
     const list = [...hit.filter(v => v.toLowerCase().startsWith(lc)), ...hit.filter(v => !v.toLowerCase().startsWith(lc))];
     if ((slot === "any" || slot === "cell") && "c.".startsWith(lc)) list.unshift("C.");
@@ -325,5 +325,5 @@ export function createInspector(ctx) {
     box.append(E);
     box.scrollTop = keep;
   }
-  return { render, hideSuggestions: hideSugg };
+  return { render };
 }

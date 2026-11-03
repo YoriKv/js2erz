@@ -50,7 +50,7 @@ export function layout(prog, opts = {}) {
 
   // 2b. wrap a long chain of layers into bands stacked top to bottom
   const band = bandsFor(nodes, layer, fwd, opts.wrap !== false);
-  const nB = Math.max(...band) + 1;
+  const nB = maxOf(band, b => b) + 1;
   const cross = fwd.filter(e => band[layer[e.a]] !== band[layer[e.b]]).concat(edges.filter((e, k) => back.has(k) && band[layer[e.a]] !== band[layer[e.b]]));
 
   // 3. items per layer (real nodes + dummies for long edges); links between adjacent layers
@@ -73,7 +73,7 @@ export function layout(prog, opts = {}) {
     links.push({ s: prev, so: prevOff, t: items[e.b], to, w: 2 });
     chains.push({ e, ds });
   }
-  const nL = Math.max(...items.map(it => it.layer)) + 1;
+  const nL = maxOf(items, it => it.layer) + 1;
   const layers = Array.from({ length: nL }, () => []);
   items.forEach(it => layers[it.layer].push(it));
   layers.forEach(l => l.sort((a, b) => a.key - b.key));
@@ -84,12 +84,23 @@ export function layout(prog, opts = {}) {
   const pos = new Map();
   const index = () => layers.forEach(l => l.forEach((it, k) => pos.set(it, k)));
   index();
+  const linksFrom = Array.from({ length: nL }, () => []);   // links by source layer
+  links.forEach(l => linksFrom[l.s.layer].push(l));
+  // pairs of links between two layers that cross: start order (port offset breaks ties) and end order strictly opposite
   const crossings = () => {
     let c = 0;
     for (let L = 0; L + 1 < nL; L++) {
-      const ls = links.filter(l => l.s.layer === L).map(l => [pos.get(l.s) + l.so / 1000, pos.get(l.t)]);
-      for (let a = 0; a < ls.length; a++) for (let b = a + 1; b < ls.length; b++)
-        if ((ls[a][0] - ls[b][0]) * (ls[a][1] - ls[b][1]) < 0) c++;
+      const ls = linksFrom[L].map(l => [pos.get(l.s) + l.so / 1000, pos.get(l.t)]);
+      if (ls.length < 2) continue;
+      // sorted by start (ties: end ascending, so they never count); count earlier links that end strictly lower (Fenwick tree)
+      ls.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+      const size = layers[L + 1].length + 1, fen = new Array(size + 1).fill(0);
+      ls.forEach(([, t], k) => {
+        let le = 0;
+        for (let j = t + 1; j > 0; j -= j & -j) le += fen[j];
+        c += k - le;
+        for (let j = t + 1; j <= size; j += j & -j) fen[j]++;
+      });
     }
     return c;
   };
@@ -118,7 +129,7 @@ export function layout(prog, opts = {}) {
   // 5. vertical placement: stack, then pull each item toward its neighbours (isotonic regression keeps order + gaps)
   for (const l of layers) { let y = 0; for (const it of l) { it.y = y; y += it.h + GAP_Y; } }
   const place = (l, desired) => {
-    // minimise sum w (y - d)^2 subject to y[k] >= y[k-1] + h[k-1] + gap  (pool adjacent violators)
+    // minimise sum (y - d)^2 subject to y[k] >= y[k-1] + h[k-1] + gap  (pool adjacent violators)
     const off = []; let acc = 0;
     l.forEach((it, k) => { off.push(acc); acc += it.h + (k < l.length - 1 ? gapAfter(it, l[k + 1]) : 0); });
     const blocks = [];
@@ -155,7 +166,7 @@ export function layout(prog, opts = {}) {
   sweep(true);
 
   // 6. x per layer (restarting in every band), bands stacked with room for the edges that run between them
-  const lw = layers.map(l => Math.max(0, ...l.map(it => it.w)));
+  const lw = layers.map(l => maxOf(l, it => it.w, 0));
   // lanes: gap g lies below band g (g = -1: above band 0); the left column carries edges that skip bands
   const gapLanes = new Map(), laneOf = new Map();
   let leftCols = 0;
@@ -170,17 +181,16 @@ export function layout(prog, opts = {}) {
   const lx = []; let x = LEFT, prevBand = 0;
   for (let L = 0; L < nL; L++) {
     if (band[L] !== prevBand) { x = LEFT; prevBand = band[L]; }
-    lx.push(x); x += lw[L] + GAP_X + extraGap(layers[L], links);
+    lx.push(x); x += lw[L] + GAP_X + extraGap(layers[L], outL);
   }
   const gapH = g => (gapLanes.get(g) ? 0.8 * U + gapLanes.get(g) * 9 : 0) + (g >= 0 && g < nB - 1 ? 1.2 * U : 0);
-  const bandTop = [], bandBot = [], regionStart = new Map();
+  const regionStart = new Map();
   let yAcc = 0;
   regionStart.set(-1, 0); yAcc += gapH(-1);
   for (let b = 0; b < nB; b++) {
     const its = items.filter(it => band[it.layer] === b);
-    const y0 = Math.min(...its.map(it => it.y)), y1 = Math.max(...its.map(it => it.y + it.h));
+    const y0 = -maxOf(its, it => -it.y), y1 = maxOf(its, it => it.y + it.h);
     for (const it of its) it.y += yAcc - y0;
-    bandTop.push(yAcc); bandBot.push(yAcc + y1 - y0);
     yAcc += y1 - y0;
     regionStart.set(b, yAcc);
     yAcc += gapH(b);
@@ -208,12 +218,12 @@ export function layout(prog, opts = {}) {
 
 // Cut the layers into bands so the picture is not one long strip. Cuts go where few edges cross.
 function bandsFor(nodes, layer, fwd, wrap) {
-  const nL = Math.max(...layer) + 1;
+  const nL = maxOf(layer, L => L) + 1;
   const lw = new Array(nL).fill(0), lh = new Array(nL).fill(0);
   nodes.forEach(n => { const L = layer[n.id]; lw[L] = Math.max(lw[L], T[n.t].size[0] * U); lh[L] += T[n.t].size[1] * U + GAP_Y; });
   const cum = [0];
   for (let L = 0; L < nL; L++) cum.push(cum[L] + lw[L] + GAP_X);
-  const TW = cum[nL], H = Math.max(3 * U, ...lh) * 1.3;
+  const TW = cum[nL], H = maxOf(lh, h => h, 3 * U) * 1.3;
   const k = wrap ? Math.max(1, Math.min(nL, Math.round(Math.sqrt(TW / (H * 1.8))))) : 1;
   const band = new Array(nL).fill(0);
   if (k < 2 || TW < 2600) return band;
@@ -237,8 +247,14 @@ function bandsFor(nodes, layer, fwd, wrap) {
 
 const gapAfter = (a, b) => (a.dummy && b.dummy) ? 6 : (a.dummy || b.dummy) ? GAP_Y * 0.6 : GAP_Y;
 // layers whose nodes fan out to many targets get a little more room for the arrows
-function extraGap(l, links) {
+function extraGap(l, outL) {
   let n = 0;
-  for (const it of l) if (!it.dummy) n = Math.max(n, links.filter(k => k.s === it).length);
+  for (const it of l) if (!it.dummy) n = Math.max(n, outL.get(it).length);
   return Math.max(0, n - 2) * 12;
+}
+// max of f over a (possibly huge) array without spreading it into arguments
+function maxOf(a, f, init = -Infinity) {
+  let m = init;
+  for (const v of a) { const x = f(v); if (x > m) m = x; }
+  return m;
 }

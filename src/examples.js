@@ -25,6 +25,7 @@ exit();
   {
     id: "road", title: "Follow a road",
     code: `// Drive along a road, turning left where it ends.
+// Needs a road in front of the bot: paint one in the simulator (generated worlds have no roads).
 while (true) {
   aim(2, 0);
   if (scan(Category.Artificial)) {
@@ -36,7 +37,7 @@ while (true) {
 `,
   },
   {
-    id: "line", title: "Line of length len",
+    id: "line", title: "Line of length LEN",
     code: `// Dig a straight tunnel LEN cells long.
 const LEN = 10;
 let i = 0;
@@ -104,6 +105,7 @@ for (const d of [Dir.E, Dir.S, Dir.W, Dir.N]) {
   {
     id: "wall", title: "Wall follower",
     code: `// Keep a wall on the right.
+// Needs open ground along a wall: paint some in the simulator (generated worlds box the bot in with rock).
 function freeAt(front, right) {
   aim(front, right);
   return scan(Category.Walkable);

@@ -3,7 +3,7 @@
 // IR
 //   Program  { name, params: string[], nodes: Node[] }       nodes[0] is always the START node
 //   Node     { id, t, x, y, outs: (id|null)[], p, src? }     id = index in nodes; x, y in grid cells
-//   Operand  { var: "name" } | { num: 1.5 } | { cell: "DenseOre" }
+//   Operand  { var: "name" } | { num: 1.5 } | { cell: "DenseOre" } | null     null = empty field (editor); exported as {var: null, const: null}
 //
 // Node params (p) per type:
 //   start {params}            rotA/rotR {dir}            aimA/aimR {front, right}
@@ -41,6 +41,7 @@ export const T = {
   cell:    { label: "CELL",      fun: "FunIsCellInCathegory", bg: "#292929", body: "#131313", size: [2, 2], outs: [["match", "match", COL.g], ["mismatch", "mismatch", COL.r]], ok: [0], key: "T", tech: "Variables" },
 };
 export const FUN_TO_TYPE = (fun, rel) => {
+  if (!fun) return null;
   if (fun === "FunRotate") return rel ? "rotR" : "rotA";
   if (fun === "FunAim") return rel ? "aimR" : "aimA";
   return Object.keys(T).find(k => T[k].fun === fun) || null;
@@ -123,7 +124,7 @@ export const WRITABLE_BUILTINS = ["aim_x", "aim_y", "aim_right", "aim_front", "a
 export const NODE_LIMIT = 1000;
 
 // ---------------------------------------------------------------- text helpers
-export const fmtNum = v => Number.isInteger(v) ? String(v) : String(+v.toFixed(4));
+export const fmtNum = v => { v = +v; return !Number.isFinite(v) ? "?" : Number.isInteger(v) ? String(v) : String(+v.toFixed(4)); };
 export function fmtOperand(o) {
   if (o == null) return "?";
   if (o.var != null) return o.var;
@@ -131,36 +132,3 @@ export function fmtOperand(o) {
   if (o.cell != null) return o.cell;
   return "?";
 }
-export function aimText(p, rel) {
-  if (rel) {
-    const parts = [];
-    if (p.front) parts.push(p.front > 0 ? `front ${p.front}` : `back ${-p.front}`);
-    if (p.right) parts.push(p.right > 0 ? `right ${p.right}` : `left ${-p.right}`);
-    return parts.join(", ") || "centre";
-  }
-  const s = v => (v >= 0 ? "+" : "") + v;
-  return `X${s(p.right)} Y${s(p.front)}`;
-}
-// One-line description of a node's settings, used by the inspector, the build list and tooltips.
-export function nodeSummary(n) {
-  const p = n.p || {};
-  switch (n.t) {
-    case "start": return p.params && p.params.length ? `params: ${p.params.join(", ")}` : "";
-    case "rotA": return `${DIR_ARROW[((p.dir % 8) + 8) % 8]} ${DIR_NAMES[((p.dir % 8) + 8) % 8]}`;
-    case "rotR": return REL_ROT[p.dir] || String(p.dir);
-    case "aimA": return aimText(p, false);
-    case "aimR": return aimText(p, true);
-    case "scan": return CATEGORY_LABEL[p.category] || p.category;
-    case "use": return p.item;
-    case "inv": return p.positive ? `bot → ${p.target}` : `${p.target} → bot`;
-    case "call": return p.program + (p.args && p.args.length ? `(${p.args.map(fmtOperand).join(", ")})` : "");
-    case "exit": return p.fail ? "FAIL" : "SUCCESS";
-    case "assign": return `${p.varname} = ${fmtOperand(p.value)}`;
-    case "oper": return `${p.varname} = ${fmtOperand(p.left)} ${OP_SYM[p.op] || "?"} ${fmtOperand(p.right)}`;
-    case "cmp": return `${fmtOperand(p.left)} ? ${fmtOperand(p.right)}`;
-    case "eq": return `${fmtOperand(p.value)} ∈ {${(p.set || []).map(fmtOperand).join(", ")}}`;
-    case "cell": return `${fmtOperand(p.value)} ∈ ${CATEGORY_LABEL[p.category] || p.category}`;
-    default: return "";
-  }
-}
-export function nodeSizePx(n, U) { const s = T[n.t].size; return [s[0] * U, s[1] * U]; }

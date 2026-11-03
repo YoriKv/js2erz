@@ -3,8 +3,8 @@ import { compile, lint, BUILTIN_DOCS } from "./compiler.js";
 import { layout } from "./layout.js";
 import { graphSvg, graphBounds, exportSvg } from "./render.js";
 import { U, sizePx, portPos } from "./geom.js";
-import { T, PALETTE, DEFAULTS, DIRS, DIR_ARROW, REL_ROT, OPS, OP_SYM, CATEGORIES, CATEGORY_LABEL, CELLS, ITEMS, INV_TARGETS,
-  BUILTIN_VARS, WRITABLE_BUILTINS, NODE_LIMIT, fmtOperand, TITLE } from "./nodes.js";
+import { T, PALETTE, DEFAULTS, DIRS, CATEGORIES, CATEGORY_LABEL, CELLS, ITEMS, INV_TARGETS,
+  BUILTIN_VARS, WRITABLE_BUILTINS, NODE_LIMIT, TITLE } from "./nodes.js";
 import { toErzstat, importJson } from "./formats.js";
 import { t, tOr, has, builtinDoc, getLang, setLang, onLangChange, LANGS } from "./i18n.js";
 import { createEditor } from "./codeedit.js";
@@ -14,13 +14,17 @@ import { createInspector } from "./inspector.js";
 
 const $ = id => document.getElementById(id);
 const LS = "js2erz.v1";
-const store = (() => { try { return JSON.parse(localStorage.getItem(LS)) || {}; } catch (e) { return {}; } })();
+const store = (() => { try { const v = JSON.parse(localStorage.getItem(LS)); return v && typeof v === "object" && !Array.isArray(v) ? v : {}; } catch (e) { return {}; } })();
 const save = () => { try { localStorage.setItem(LS, JSON.stringify(store)); } catch (e) { /* storage unavailable */ } };
 store.opts = Object.assign({ live: true, codeW: null, sideW: null }, store.opts);
+// drop damaged entries rather than fail at every start
+const isStr = x => typeof x === "string";
+store.files = Array.isArray(store.files) ? store.files.filter(f => f && isStr(f.id) && isStr(f.name) && isStr(f.code)) : [];
+store.imported = Array.isArray(store.imported) ? store.imported.filter(p => p && Array.isArray(p.nodes) && p.nodes.length) : [];
 
 // ---------------------------------------------------------------- state
 let compiled = [];        // [{prog, routes, edited, view, undo, redo}] from the code
-let imported = store.imported || [];   // plain Programs from JSON imports (kept across reloads)
+let imported = store.imported;         // plain Programs from JSON imports (kept across reloads)
 let cur = 0;              // index into tabs()
 let sel = new Set(), selEdge = null, activePort = null, hover = null, placing = null;
 let simCur = null, codeHl = new Set(), lastErr = null, lastRes = null;
@@ -51,24 +55,32 @@ const drawLabels = () => ({
 // ---------------------------------------------------------------- saved programs and templates
 // store.files: [{id, name, code, t}] (the user's programs); store.cur: {file: id} or {tpl: id} (a template, not saved).
 // Editing a template saves it as a new program, which is autosaved from then on.
+// A #code= link is read once and removed from the address bar; its code is kept as store.link (the "link" template)
+// until it is edited, so a reload doesn't bring back an old snapshot.
 const BLANK = { id: "blank", code: `"use program Main";\n\n` };
-let linkCode = null;      // code from a #code= link: a template of its own until edited
+let linkCode = null;      // code from a #code= link opened now
 {
   const m = location.hash.match(/code=([^&]+)/);
-  if (m) { try { linkCode = decodeURIComponent(escape(atob(m[1].replace(/-/g, "+").replace(/_/g, "/")))); } catch (e) { /* bad link */ } }
+  if (m) {
+    try { linkCode = decodeURIComponent(escape(atob(m[1].replace(/-/g, "+").replace(/_/g, "/")))); } catch (e) { /* bad link */ }
+    history.replaceState(null, "", location.href.replace(/([#&])code=[^&]*&?/, "$1").replace(/[#&]$/, ""));
+  }
 }
-store.files = store.files || [];
 if (store.source != null) {            // before saved programs there was one autosaved source
   const ex = EXAMPLES.find(x => x.code === store.source);
   if (ex) store.cur = { tpl: ex.id };
-  else if (store.source.trim()) { const f = { id: fileId(), name: t("file.mine"), code: store.source, t: Date.now() }; store.files.push(f); store.cur = { file: f.id }; }
+  else if (isStr(store.source) && store.source.trim()) { const f = { id: fileId(), name: t("file.mine"), code: store.source, t: Date.now() }; store.files.push(f); store.cur = { file: f.id }; }
   delete store.source; save();
 }
 function fileId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
 const curFile = () => (store.cur && store.cur.file ? store.files.find(f => f.id === store.cur.file) : null);
-const template = id => id === "blank" ? BLANK : id === "link" ? { id, code: linkCode ?? "" } : EXAMPLES.find(x => x.id === id);
+const template = id => id === "blank" ? BLANK : id === "link" ? (isStr(store.link) ? { id, code: store.link } : null) : EXAMPLES.find(x => x.id === id);
 const tplTitle = id => id === "blank" ? t("tpl.blank") : id === "link" ? t("file.link") : tOr("ex." + id, template(id)?.title || id);
-if (linkCode != null) { const same = store.files.find(f => f.code === linkCode); store.cur = same ? { file: same.id } : { tpl: "link" }; }
+if (linkCode != null) {
+  const same = store.files.find(f => f.code === linkCode);
+  if (same) store.cur = { file: same.id }; else { store.link = linkCode; store.cur = { tpl: "link" }; }
+  save();
+}
 if (!curFile() && !(store.cur && store.cur.tpl && template(store.cur.tpl))) store.cur = { tpl: EXAMPLES[0].id };
 const curCode = () => (curFile() ? curFile().code : template(store.cur.tpl).code);
 function uniqueName(base, except) {
@@ -81,8 +93,9 @@ function saveTemplateAs(code) {
   const id = store.cur.tpl, m = template(id).code.match(/"use program\s+([^"]+)"/);
   const base = id === "blank" ? t("file.untitled") : id === "link" ? (m ? m[1].trim() : t("file.link")) : m ? m[1].trim() : tplTitle(id);
   const f = { id: fileId(), name: uniqueName(base), code, t: Date.now() };
-  store.files.push(f); store.cur = { file: f.id }; save();
-  if (id === "link") { linkCode = null; history.replaceState(null, "", location.href.replace(/([#&])code=[^&]*&?/, "$1").replace(/[#&]$/, "")); }
+  store.files.push(f); store.cur = { file: f.id };
+  if (id === "link") delete store.link;
+  save();
   renderFiles(); toast(t("file.created", f.name));
 }
 function onEdit(v) {
@@ -92,8 +105,9 @@ function onEdit(v) {
 // switch to a saved program or a template: new code, fresh graph, simulator reset
 function openCur(cur) {
   store.cur = cur; save();
-  editor.setValue(curCode());
-  compiled.forEach(c => { c.edited = false; });
+  editor.setValue(curCode());          // fresh editor state: no undo into the previous program, no marks
+  codeHl = new Set(); lintedSrc = null;
+  compiled.forEach(c => { c.edited = false; c.view = null; });   // a different program: fit it
   world && world.stop();
   runCompile(true);
   renderFiles();
@@ -118,8 +132,8 @@ function runLint() {
   renderDiag();
 }
 
-// structure signature: same graph shape keeps the hand-tidied positions
-const shape = p => p.name + "|" + p.nodes.map(n => n.t + JSON.stringify(n.p) + n.outs.join(",")).join(";");
+// structure signature (node types and wiring; parameters don't move anything): same shape keeps the hand-tidied positions
+const shape = p => p.name + "|" + p.nodes.map(n => n.t + ":" + n.outs.join(",")).join(";");
 function runCompile(force) {
   if (!force && compiled.some(c => c.edited)) { showBanner(); return; }
   const src = editor.value;
@@ -140,14 +154,14 @@ function runCompile(force) {
       p.nodes.forEach((n, i) => { n.x = o.prog.nodes[i].x; n.y = o.prog.nodes[i].y; });
       return { prog: p, routes: o.routes, edited: false, view: o.view, undo: [], redo: [] };
     }
-    return { prog: p, routes: layout(p), edited: false, view: o ? o.view : null, undo: [], redo: [], fresh: true };
+    return { prog: p, routes: layout(p), edited: false, view: o ? o.view : null, undo: [], redo: [] };
   });
   const k = tabs().findIndex(t => t.prog.name === curName);
   cur = k >= 0 ? k : 0;
   sel.clear(); selEdge = null; activePort = null;
   renderDiag();
   hideBanner();
-  renderTabs(); if (view() && (view().fresh || !view().view)) fit(); else render();
+  renderTabs(); if (view() && !view().view) fit(); else render();   // keep zoom and pan while typing
   renderSide();
   world && world.refresh();
 }
@@ -236,6 +250,7 @@ function fit() {
   render();
 }
 function zoomAt(f, cx, cy) {
+  if (!view()) return;
   const z0 = view().view || { x: 0, y: 0, z: 1 };
   const z = Math.min(3, Math.max(0.05, z0.z * f));
   setView({ x: cx - (cx - z0.x) * z / z0.z, y: cy - (cy - z0.y) * z / z0.z, z });
@@ -256,11 +271,11 @@ svg.addEventListener("pointerdown", e => {
   svg.setPointerCapture(e.pointerId);
   const [wx, wy] = toWorld(e);
   const portEl = e.target.closest("[data-port]"), nodeEl = e.target.closest("[data-node]"), edgeEl = e.target.closest("[data-edge]");
-  if (e.button === 1 || e.button === 2) { drag = { kind: "pan", sx: e.clientX, sy: e.clientY, v0: { ...view().view } }; svg.classList.add("panning"); return; }
+  if (e.button === 1 || e.button === 2) { e.preventDefault(); drag = { kind: "pan", sx: e.clientX, sy: e.clientY, v0: { ...view().view } }; svg.classList.add("panning"); return; }
   if (placing) { addNode(placing, wx, wy); return; }
   if (portEl) {
     const [id, i] = portEl.dataset.port.split(":").map(Number);
-    drag = { kind: "link", id, i, x: wx, y: wy, moved: false };
+    drag = { kind: "link", id, i, sx: e.clientX, sy: e.clientY, moved: false };
     activePort = { id, i }; return;
   }
   if (nodeEl) {
@@ -277,7 +292,7 @@ svg.addEventListener("pointerdown", e => {
     const [id, i] = edgeEl.dataset.edge.split(":").map(Number);
     selEdge = { id, i }; sel.clear(); render(); renderSide(); return;
   }
-  if (e.shiftKey) { drag = { kind: "box", x0: wx, y0: wy, x1: wx, y1: wy, add: new Set(sel) }; return; }
+  if (e.shiftKey) { selEdge = null; drag = { kind: "box", x0: wx, y0: wy, x1: wx, y1: wy, add: new Set(sel) }; return; }
   drag = { kind: "pan", sx: e.clientX, sy: e.clientY, v0: { ...(view().view || { x: 0, y: 0, z: 1 }) }, click: true };
   svg.classList.add("panning");
 });
@@ -306,7 +321,9 @@ svg.addEventListener("pointermove", e => {
     dropRoutes(drag.start.map(s => s[0]));
     render();
   } else if (drag.kind === "link") {
-    drag.x = wx; drag.y = wy; drag.moved = true;
+    // a click on a port (to pick it for the palette) must not rewire it: only a real drag counts
+    if (!drag.moved && Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < 4) return;
+    drag.moved = true;
     const a = prog().nodes[drag.id], [x1, y1] = portPos(a, drag.i);
     const o = svg.querySelector("#over"), col = T[a.t].outs[drag.i][2];
     if (o) o.innerHTML = `<path d="M${x1},${y1} C${x1 + 60},${y1} ${wx - 60},${wy} ${wx},${wy}" fill="none" stroke="${col}" stroke-width="2.6" stroke-dasharray="5 4"/>`;
@@ -336,6 +353,17 @@ svg.addEventListener("pointerup", e => {
   else if (d.kind === "pan" && d.click) { sel.clear(); selEdge = null; activePort = null; render(); renderSide(); }
 });
 svg.addEventListener("contextmenu", e => e.preventDefault());
+svg.addEventListener("mousedown", e => { if (e.button === 1) e.preventDefault(); });   // no middle-button autoscroll
+// a cancelled pointer (touch gesture, lost capture) ends the drag where it is
+const dropDrag = () => {
+  if (!drag) return;
+  const d = drag; drag = null;
+  svg.classList.remove("panning");
+  const o = svg.querySelector("#over"); if (o) o.innerHTML = "";
+  if (d.kind === "move" && d.moved) markMoved();
+};
+svg.addEventListener("pointercancel", dropDrag);
+svg.addEventListener("lostpointercapture", dropDrag);
 svg.addEventListener("wheel", e => {
   if (!view()) return;
   e.preventDefault();
@@ -369,11 +397,13 @@ function snapshot() {
   v.redo = [];
 }
 function restore(from, to) {
-  const v = view(); if (!v[from].length) return;
+  const v = view(); if (!v || !v[from].length) return;
+  const before = shape(v.prog);
   v[to].push(JSON.stringify(v.prog.nodes));
   v.prog.nodes = JSON.parse(v[from].pop());
   v.routes = new Map(); sel = new Set([...sel].filter(k => k < v.prog.nodes.length)); selEdge = null;
-  markEdited(); render(); renderSide();
+  if (shape(v.prog) !== before) markEdited(); else markMoved();   // undoing a move doesn't pause live compile
+  render(); renderSide();
 }
 function markEdited() {
   const v = view();
@@ -454,6 +484,8 @@ function renderPalette() {
 }
 
 document.addEventListener("keydown", e => {
+  // an open dialog takes the keys: Escape closes it, the graph shortcuts and Ctrl+Enter wait
+  if (!modal.hidden) { if (e.key === "Escape") { e.preventDefault(); closeModal(); } return; }
   const ae = document.activeElement;
   const typing = ae && (["INPUT", "TEXTAREA", "SELECT"].includes(ae.tagName) || ae.isContentEditable);
   if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); runCompile(true); return; }
@@ -465,7 +497,7 @@ document.addEventListener("keydown", e => {
   else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") { e.preventDefault(); restore("redo", "undo"); }
   else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") copySel();
   else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v") paste();
-  else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") { e.preventDefault(); sel = new Set(prog().nodes.map(n => n.id)); render(); }
+  else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") { e.preventDefault(); sel = new Set(prog().nodes.map(n => n.id)); selEdge = null; render(); renderSide(); }
   else if (e.key === "f" || e.key === "Home") fit();
 });
 
@@ -534,7 +566,6 @@ function renderRef() {
     el("div", { class: "sec" }, el("h3", {}, t("ref.sysvars")), chips(BUILTIN_VARS, x => tOr("var." + x, "")),
       el("p", { class: "note" }, t("ref.writable", WRITABLE_BUILTINS.join(", ")))));
 }
-// datalist of known variables for operand inputs
 
 // ---------------------------------------------------------------- simulator
 let world = null;
@@ -582,7 +613,7 @@ const svgForExport = () => {
   const tech = [...new Set(p.nodes.map(n => T[n.t].tech).filter(Boolean))];
   const nodes = t("n.nodes", p.nodes.length);
   return exportSvg(p, { routes: v.routes, title: p.name, labels: drawLabels(),
-    subtitle: tech.length ? t("exp.sub", nodes, tech.map(x => tOr("tech." + x, x)).join(", ")) : `${nodes} · js2erz` });
+    subtitle: tech.length ? t("exp.sub", nodes, tech.map(techLabel).join(", ")) : `${nodes} · js2erz` });
 };
 $("bSvg").addEventListener("click", () => { if (view()) download(`${prog().name}.svg`, new Blob([svgForExport()], { type: "image/svg+xml" })); });
 $("bPng").addEventListener("click", () => {
@@ -606,12 +637,16 @@ modal.addEventListener("click", e => { if (e.target === modal) closeModal(); });
 $("bJson").addEventListener("click", () => {
   if (!view()) return;
   const p = prog();
+  let text = null, err = null;
+  try { text = JSON.stringify(toErzstat(p), null, 1); } catch (e) { err = e; }
   const ta = el("textarea", { readonly: true });
-  ta.value = JSON.stringify(toErzstat(p), null, 1);
+  ta.value = text ?? "";
   modalBox.append(el("h2", {}, t("json.title", p.name)),
     el("p", { class: "note" }, t("json.note")),
-    ta, el("div", { class: "row" }, el("button", { type: "button", onclick: () => copyText(ta.value) }, t("btn.copy")),
-      el("button", { type: "button", onclick: () => download(`${p.name}.json`, new Blob([ta.value], { type: "application/json" })) }, t("btn.download")),
+    err ? el("div", { class: "err" }, err.message) : ta,
+    el("div", { class: "row" },
+      err ? null : el("button", { type: "button", onclick: () => copyText(ta.value) }, t("btn.copy")),
+      err ? null : el("button", { type: "button", onclick: () => download(`${p.name}.json`, new Blob([ta.value], { type: "application/json" })) }, t("btn.download")),
       el("button", { type: "button", onclick: closeModal }, t("btn.close"))));
   modal.hidden = false;
 });
@@ -627,6 +662,7 @@ $("bImport").addEventListener("click", () => {
       if (name.value.trim()) p.name = name.value.trim();
       while (tabs().some(t => t.prog.name === p.name)) p.name += "'";
       const routes = relayout.checked ? layout(p) : new Map();
+      graphSvg(p, { routes, labels: drawLabels() });   // a program the canvas can't draw is refused here, not saved
       imported.push(p); persistImported();
       wrapImported(p).routes = routes;
       cur = tabs().findIndex(t => t.prog === p);
@@ -641,9 +677,7 @@ $("bImport").addEventListener("click", () => {
 });
 $("bShare").addEventListener("click", () => {
   const b64 = btoa(unescape(encodeURIComponent(editor.value))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  const url = location.href.replace(/#.*$/, "") + "#code=" + b64;
-  history.replaceState(null, "", url);
-  copyText(url);
+  copyText(location.href.replace(/#.*$/, "") + "#code=" + b64);   // the address bar stays as it is
 });
 
 // ---------------------------------------------------------------- top bar

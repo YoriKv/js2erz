@@ -189,33 +189,28 @@ const theme = EditorView.theme({
 // ---------------------------------------------------------------- the editor
 export function createEditor(root, { value = "", onChange = () => {}, onCursor = () => {} } = {}) {
   root.classList.add("ce");
-  let quiet = false, lastCur = null;
+  let lastCur = null;
   const lineOf = (state, pos) => state.doc.lineAt(pos).number;
-  const view = new EditorView({
-    parent: root,
-    state: EditorState.create({
-      doc: value,
-      extensions: [
-        lineNumbers(), highlightActiveLineGutter(), highlightSpecialChars(), history(), drawSelection(), dropCursor(),
-        EditorState.allowMultipleSelections.of(true), indentOnInput(), indentUnit.of("  "), EditorState.tabSize.of(2),
-        syntaxHighlighting(style), bracketMatching(), closeBrackets(), rectangularSelection(), crosshairCursor(),
-        highlightActiveLine(), highlightSelectionMatches(), javascript(),
-        autocompletion({ override: [complete], icons: true, activateOnTyping: true }),
-        gameHighlight, lineMarks, lineDecos, gutterClasses, theme,
-        keymap.of([{ key: "Mod-Enter", run: () => true }, ...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap,
-          ...completionKeymap, ...lintKeymap, indentWithTab]),
-        EditorView.contentAttributes.of({ "aria-label": "JavaScript source", spellcheck: "false", autocapitalize: "off", autocorrect: "off" }),
-        EditorView.updateListener.of(u => {
-          if (u.docChanged && !quiet) onChange(u.state.doc.toString());
-          if (u.selectionSet || u.docChanged) {
-            const s = u.state.selection.main, a = lineOf(u.state, s.from), b = s.empty ? null : lineOf(u.state, s.to);
-            const key = `${a}:${b}`;
-            if (key !== lastCur && (u.selectionSet || u.focusChanged)) { lastCur = key; onCursor(s.empty ? lineOf(u.state, s.head) : a, b); }
-          }
-        }),
-      ],
+  const extensions = [
+    lineNumbers(), highlightActiveLineGutter(), highlightSpecialChars(), history(), drawSelection(), dropCursor(),
+    EditorState.allowMultipleSelections.of(true), indentOnInput(), indentUnit.of("  "), EditorState.tabSize.of(2),
+    syntaxHighlighting(style), bracketMatching(), closeBrackets(), rectangularSelection(), crosshairCursor(),
+    highlightActiveLine(), highlightSelectionMatches(), javascript(),
+    autocompletion({ override: [complete], icons: true, activateOnTyping: true }),
+    gameHighlight, lineMarks, lineDecos, gutterClasses, theme,
+    keymap.of([{ key: "Mod-Enter", run: () => true }, ...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap,
+      ...completionKeymap, ...lintKeymap, indentWithTab]),
+    EditorView.contentAttributes.of({ "aria-label": "JavaScript source", spellcheck: "false", autocapitalize: "off", autocorrect: "off" }),
+    EditorView.updateListener.of(u => {
+      if (u.docChanged) onChange(u.state.doc.toString());
+      if (u.selectionSet || u.docChanged) {
+        const s = u.state.selection.main, a = lineOf(u.state, s.from), b = s.empty ? null : lineOf(u.state, s.to);
+        const key = `${a}:${b}`;
+        if (key !== lastCur && (u.selectionSet || u.focusChanged)) { lastCur = key; onCursor(s.empty ? lineOf(u.state, s.head) : a, b); }
+      }
     }),
-  });
+  ];
+  const view = new EditorView({ parent: root, state: EditorState.create({ doc: value, extensions }) });
   const posOf = (line, col = 1) => {
     const d = view.state.doc, l = d.line(Math.max(1, Math.min(line, d.lines)));
     return Math.min(l.to, l.from + Math.max(0, col - 1));
@@ -224,10 +219,13 @@ export function createEditor(root, { value = "", onChange = () => {}, onCursor =
   return {
     view,
     get value() { return view.state.doc.toString(); },
+    // a new document: fresh state, so undo can't reach back into the previous program; no onChange / onCursor
+    // (setState runs no update listeners); line marks and diagnostics start empty, the app sets them again
     setValue(v) {
-      quiet = true;
-      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: v }, selection: { anchor: 0 }, scrollIntoView: true });
-      quiet = false;
+      view.setState(EditorState.create({ doc: v, extensions }));
+      lastCur = null;
+      diags = [];
+      view.scrollDOM.scrollTop = 0;
     },
     setMarks(m) {
       const v = {};

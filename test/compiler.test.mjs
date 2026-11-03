@@ -346,3 +346,132 @@ test("lint: syntax errors, extra arguments to functions, clean examples", async 
 test("compile still stops at the first error", () => {
   assert.throws(() => compile("step(1); turn(30);"), /^Error: step\(\) takes no arguments$/);
 });
+
+// ---------------------------------------------------------------- review fixes (2026-11-02)
+test("a labelled loop keeps its label when its condition inlines a function with a loop", () => {
+  const fn = `function ok(i) { let k = 0; while (k < 2) k++; return i < 3; }`;
+  assert.equal(run(`let n = 0, i = 0; ${fn} outer: while (ok(i)) { i++; for (;;) { n++; continue outer; } }`).vars("n"), 3);
+  assert.equal(run(`let n = 0; ${fn} outer: for (let i = 0; ok(i); i++) { for (;;) { n++; continue outer; } }`).vars("n"), 3);
+  assert.equal(run(`let n = 0; function g() { let k = 0; while (k < 2) k++; return k; }
+    outer: for (let i = g(); i < 5; i++) { for (;;) { n++; continue outer; } }`).vars("n"), 3);
+  // a constant-false loop doesn't pass its label on; several labels name one loop
+  assert.equal(run(`let n = 0; A: while (false) {} B: for (let i = 0; i < 2; i++) { for (;;) { n++; continue B; } }`).vars("n"), 2);
+  assert.equal(run(`let n = 0; A: B: while (n < 3) { n++; if (n < 2) continue A; continue B; }`).vars("n"), 3);
+});
+
+test("a nested function that closes over its caller's parameters is never shared", () => {
+  const src = `let acc = 0;
+    function outer(c) { function inner() { aim(c, 0); aim(c, 1); aim(c, 2); aim(c, 3); aim(c, -1); return c; } acc = acc * 10 + inner(); }
+    outer(1); outer(2); outer(3);`;
+  const { on } = both(src, ["acc"]);
+  assert.equal(on.vars("acc"), 123);
+  const arrow = src.replace("function inner() {", "const inner = () => {").replace("return c; }", "return c; };");
+  assert.equal(both(arrow, ["acc"]).on.vars("acc"), 123);
+});
+
+test("a stored outcome keeps its type through copies and functions", () => {
+  assert.equal(run(`function g() { return step(); } let r = g(); let k = 0; if (r) k = 1;`).vars("k"), 1);
+  assert.equal(run(`function g() { return step(); } let r = g(); let k = 0; if (r === "success") k = 1;`).vars("k"), 1);
+  assert.equal(run(`let r = step(); let q = r; let k = 0; if (q) k = 1;`).vars("k"), 1);
+  // a function returning an outcome to a value is never shared: the condition reads the outcome, not "index != 0"
+  const src = `let a = 0; function f() { aim(1, 0); aim(2, 0); aim(3, 0); aim(0, 1); aim(0, 2); return step(); }
+    let r = f(); if (f()) a++; if (f()) a++; if (f()) a++; if (f()) a++;`;
+  const { on } = both(src, ["a", "r"]);
+  assert.equal(on.vars("a"), 4);
+  assert.deepEqual(on.r.shared, []);
+});
+
+test("two shared bodies never share temporaries", () => {
+  const src = `let acc = 0, yy = 3;
+    function f2(v) { let r = (v + 1) * (v + 2); r = r + 1; r = r - 1; r = r * 1; r = r + 2; r = r - 2; return r; }
+    function f(k) { let q = (yy + k) * f2(yy); q = q + 1; q = q - 1; q = q * 1; q = q + 2; q = q - 2; acc = acc + q; }
+    f(1); f(1); f(1); f(2); f(2); f(2); acc = acc + f2(yy);`;
+  const { on } = both(src, ["acc"]);
+  assert.equal(on.vars("acc"), 560);
+  const tags = on.r.shared.map(s => s.tag);
+  assert.ok(tags.length >= 2 && new Set(tags).size === tags.length, tags.join());
+});
+
+test("a value function that falls off the end returns 0", () => {
+  assert.equal(run(`let z = (x + 1) * 2; function f() { if (x > 100) return 5; } let a = f();`).vars("a"), 0);
+  const src = `let s = 0, p = 1, q = 200; function g(v) { let r = v * 2; r = r + 1; r = r - 1; r = r * 1; r = r + 3; r = r - 3; if (v > 100) return r; }
+    s = g(p) + g(q) + g(p) + g(q);`;
+  const { on } = both(src, ["s"]);
+  assert.equal(on.vars("s"), 800);
+  assert.equal(on.r.shared.length, 1);
+});
+
+test("function arguments see the caller's scope; default values see the earlier parameters", () => {
+  const a = run(`function apply(g, v) { g(); return v; } let v = 1; let r = apply(() => { v = v + 10; }, 5);`);
+  assert.deepEqual([a.vars("v"), a.vars("r")], [11, 5]);
+  assert.equal(run(`function apply(g, k) { g(); } let k = 1; apply(() => { k = k + 10; }, k);`).vars("k"), 11);
+  assert.equal(run(`function f(a, b = a + 1) { return b; } let r = f(3);`).vars("r"), 4);
+  assert.equal(run(`let a = 100; function f(a, b = a + 1) { return b; } let r = f(3);`).vars("r"), 4);
+  // a constant passed to a parameter the body changes is copied
+  assert.equal(run(`function f(p) { p++; return p; } const K = 3; let r = f(K);`).vars("r"), 4);
+});
+
+test("a variable argument is only shared when the call can't change it", () => {
+  assert.equal(run(`let n = 1; function f(p) { { let n = 0; n++; } n = 5; return p; } let r = f(n);`).vars("r"), 1);
+  assert.equal(run(`function f(p) { var p = 3; return p; } let a = 1; let r = f(a);`).vars("a"), 1);
+});
+
+test('a "use program" function can only use its own variables', () => {
+  assert.throws(() => compile(`let n = 5; function P() { "use program"; n = 1; } P();`), /"n" belongs to program Main; pass it as a parameter/);
+  assert.throws(() => compile(`let n = 5; function P() { "use program"; return n > 3; } P();`), /belongs to program Main/);
+  // functions declared inside a program's body are hoisted there
+  const r = compile(`function P() { "use program"; function h() { step(); } h(); h(); } P();`);
+  assert.equal(r.programs[1].nodes.filter(n => n.t === "move").length, 2);
+});
+
+test("unsupported and non-finite values fail with a location", () => {
+  for (const src of [`let b = 1; let a = b ?? 2;`, `let b = 1; if (b ?? 2) step();`, `let b = 1; b ?? step();`])
+    assert.throws(() => compile(src), e => /\?\? operator is not supported/.test(e.message) && e.loc?.line === 1, src);
+  for (const src of [`let a = 1 / 0;`, `let a = 0 / 0;`, `let a = -Infinity;`])
+    assert.throws(() => compile(src), /not a finite number/, src);
+  assert.throws(() => compile(`let a = Math.max();`), /Math.max\(\) needs at least 1 argument/);
+  assert.throws(() => compile(`let a = Math.abs();`), /Math.abs\(\) needs 1 argument/);
+  assert.throws(() => compile(`let b = -3; let a = Math.sign(b, 5);`), /Math.sign\(\) takes 1 argument/);
+  assert.throws(() => compile(`let k = 0; if (inCategory()) k = 1;`), e => /inCategory\(\) needs 2 arguments/.test(e.message) && !!e.loc);
+  assert.throws(() => compile(`const A = [1]; if (A.includes()) pass();`), e => /includes\(\) needs 1 argument/.test(e.message) && !!e.loc);
+  assert.throws(() => compile(`let q = 1; q.step();`), /unknown function q.step\(\)/);
+  assert.throws(() => compile(`if (foo.step()) pass();`), /unknown function foo.step\(\)/);
+});
+
+test("a duplicate outcome case is skipped with a warning", () => {
+  const src = `let k = 0; switch (step()) { case "success": k = 1; break; case "success": k = 2; break; }`;
+  const { r, vars } = run(src);
+  assert.equal(vars("k"), 1);
+  assert.ok(r.warnings.some(w => /duplicate case "success"/.test(w.msg)));
+});
+
+test("a shared function's mode doesn't depend on which call comes first", () => {
+  const F = `function f(v) { let r = v * v; r = r + 1; r = r - 1; r = r * 1; r = r + 2; r = r - 2; return r > 3; }`;
+  const condFirst = `let p = 1, q = 2, k = 0; ${F} if (f(p)) k++; if (f(q)) k++; if (f(p)) k++; let a = f(q); let b = f(p); let c = f(q);`;
+  const valueFirst = `let p = 1, q = 2, k = 0; ${F} let a = f(q); let b = f(p); let c = f(q); if (f(p)) k++; if (f(q)) k++; if (f(p)) k++;`;
+  const x = both(condFirst, ["k", "a", "b", "c"]), y = both(valueFirst, ["k", "a", "b", "c"]);
+  assert.equal(nodesOf(x.on.r), nodesOf(y.on.r));
+  assert.deepEqual(x.on.r.shared.map(s => s.calls), [6]);
+});
+
+test("a variable turn / rotateTo matches every value the constant form accepts; others do nothing", () => {
+  assert.equal(run(`let d = 270; turn(d);`).s.bot.dir, 6);
+  assert.equal(run(`let d = -180; turn(d);`).s.bot.dir, 4);
+  assert.equal(run(`let d = 30; turn(d); let after = 1;`).s.bot.dir, 0);
+  assert.equal(run(`let d = 30; turn(d); let after = 1;`).vars("after"), 1);
+  assert.equal(run(`let d = 9; rotateTo(d);`).s.bot.dir, 1);
+  assert.equal(run(`let d = -1; rotateTo(d);`).s.bot.dir, 7);
+  assert.match(compile(`let d = 2; rotateTo(d);`).warnings[0].msg, /8 EQ nodes \+ 8 fixed nodes; any other value does nothing/);
+});
+
+test("temporaries never use a program's own variable names", () => {
+  assert.equal(run(`let _t1 = 100; let a = (x + 1) * (x + 2); let b = _t1;`).vars("b"), 100);
+});
+
+test("the cases of a switch share one block scope", async () => {
+  const { lint } = await import("../src/compiler.js");
+  const src = `let v = 1; switch (v) { case 1: let z = 2; turn(z * 45); break; }`;
+  assert.deepEqual(lint(src).errors, []);
+  assert.deepEqual(lint(`let v = 1; switch (v) { case 1: let z = 2; break; }`).warnings.map(w => w.msg), ['"z" is never used']);
+  assert.equal(run(`let v = 1, n = 0; switch (v) { case 1: function g() { n++; } g(); g(); break; }`).vars("n"), 2);
+});

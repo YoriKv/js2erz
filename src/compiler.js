@@ -49,10 +49,14 @@ const ENUMS = {
 ENUMS.Category.Hard = ENUMS.Category.DiggableHard;
 ENUMS.Target.Base = ENUMS.Target.Storage;
 const constOperand = (c, node) => {
-  if (c.k === "num") return { num: c.v };
+  if (c.k === "num") return { num: finiteNum(c.v, node) };
   if (c.k === "cell") return { cell: c.v };
   fail(`a ${c.k === "str" ? "string" : c.k} constant can't be used as a value here`, node);
 };
+function finiteNum(v, node) {
+  if (!Number.isFinite(v)) fail(`this value is not a finite number (${v}); the game can't store it`, node);
+  return v;
+}
 const truthy = c => c.k === "num" ? c.v !== 0 : c.k === "str" ? c.v !== "" : true;
 
 // ---------------------------------------------------------------- builtin functions
@@ -61,11 +65,21 @@ const ROT_NAMES = { turnLeft: -2, turnRight: 2, turnAround: 4 };
 const OUTCOME_FUNS = new Set(["step", "move", "dig", "moveDig", "scan", "use", "useItem", "inventory", "unload", "load", "autoCargo", "call"]);
 const ACTION_FUNS = new Set(["rotateTo", "turn", "turnLeft", "turnRight", "turnAround", "aim", "aimAt", "pass"]);
 const SPECIAL_FUNS = new Set(["exit", "fail", "halt", "anyOf", "inCategory", "log"]);
-// [min, max] arguments of the built-in calls (anyOf, inCategory, call and log check their own)
+// [min, max] arguments of the built-in calls (anyOf, call and log check their own)
 const ARITY = { step: [0, 0], move: [0, 0], dig: [0, 0], moveDig: [0, 0], autoCargo: [0, 0], pass: [0, 0], halt: [0, 0], fail: [0, 0],
   turnLeft: [0, 0], turnRight: [0, 0], turnAround: [0, 0], turn: [1, 1], rotateTo: [1, 1], aim: [2, 2], aimAt: [2, 2],
-  scan: [1, 1], use: [1, 1], useItem: [1, 1], unload: [0, 1], load: [0, 1], inventory: [1, 2], exit: [0, 1] };
+  scan: [1, 1], use: [1, 1], useItem: [1, 1], unload: [0, 1], load: [0, 1], inventory: [1, 2], exit: [0, 1], inCategory: [2, 2],
+  includes: [1, 1] };
+// Math functions that fold or compile, with their argument counts ([min, max]; max null = any)
+const MATH_ARITY = { abs: [1, 1], sign: [1, 1], floor: [1, 1], ceil: [1, 1], round: [1, 1], trunc: [1, 1], sqrt: [1, 1],
+  min: [1, null], max: [1, null], random: [0, 0] };
+const TEMP_NAME = /^_(\w+_)?t\d+$/;
 const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+function checkMathArity(m, e) {
+  const r = MATH_ARITY[m], n = e.arguments.length; if (!r) return;
+  if (n < r[0]) fail(`Math.${m}() needs ${r[1] === r[0] ? "" : "at least "}${plural(r[0], "argument")}`, e);
+  if (r[1] != null && n > r[1]) fail(r[1] === 0 ? `Math.${m}() takes no arguments` : `Math.${m}() takes ${plural(r[1], "argument")}`, e.arguments[r[1]]);
+}
 function checkArity(name, e) {
   const r = ARITY[name]; if (!r) return;
   const n = e.arguments.length, [lo, hi] = r;
@@ -99,8 +113,9 @@ export const BUILTIN_DOCS = [
 ];
 
 // ---------------------------------------------------------------- scopes
+// top: a program's own top-level scope (functions declared there have a fixed closure and may be shared)
 class Scope {
-  constructor(parent, owner) { this.parent = parent; this.owner = owner; this.map = new Map(); }
+  constructor(parent, top = false) { this.parent = parent; this.top = top; this.map = new Map(); }
   lookup(name) { for (let s = this; s; s = s.parent) if (s.map.has(name)) return s.map.get(name); return null; }
 }
 
@@ -111,9 +126,10 @@ class Builder {
     this.nodes = []; this.pending = [];
     this.live = new Map();        // game variable name -> number of live JS bindings using it
     this.types = new Map();       // game variable name -> "num" | "cell" | "any" | {outcome: type}
-    this.temps = 0; this.maxTemps = 0; this.tempPrefix = "_t";
+    this.temps = 0; this.tempPrefix = "_t";
     this.everNames = new Set();   // every game variable name bound in this program
     this.reserved = new Set();    // names taken by shared functions (parameters, return site, return value)
+    this.tags = new Set();        // shared function tags (each one is also a temporary prefix, _<tag>_t)
     this.shared = new Map();      // key -> shared function (compiled once, see sharedCall)
     const s = this.emit("start", { params: params.slice() }, null);
     this.pending = [new Hole(this, s, 0)];
@@ -138,7 +154,13 @@ class Builder {
     } else label.waiters.push(...this.pending);
     this.pending = [];
   }
-  temp() { this.temps++; this.maxTemps = Math.max(this.maxTemps, this.temps); return `${this.tempPrefix}${this.temps}`; }
+  // a fresh temporary; skips names the program uses for its own variables. Its compile-time type starts unknown.
+  temp() {
+    let name;
+    do { this.temps++; name = `${this.tempPrefix}${this.temps}`; } while (this.everNames.has(name) || this.reserved.has(name));
+    this.types.delete(name);
+    return name;
+  }
 }
 
 // ---------------------------------------------------------------- compiler
@@ -152,8 +174,10 @@ export function compile(source, opts = {}) {
     throw err;
   }
   // 1. everything inlined; this run also counts how often each function is inlined and how big it gets
-  const once = share => new Compiler({ ...opts, share }).run(ast);
+  let baseStats = null;   // the counting run's statistics: trials take each shared function's mode from them
+  const once = share => new Compiler({ ...opts, share, baseStats }).run(ast);
   const base = once(new Set());
+  baseStats = base.stats;
   base.shared = [];
   if (opts.share === false) return base;
   const size = r => r.programs.reduce((a, p) => a + p.nodes.length, 0);
@@ -168,11 +192,9 @@ export function compile(source, opts = {}) {
     if (size(trial) <= size(best) - 2) { set.add(st.key); best = trial; }
   }
   if (best !== base) {
-    best.shared = best.sharedInfo.map(sh => ({ ...sh, saved: null }));
-    const saved = size(base) - size(best);
-    best.sharedSaved = saved;
+    best.shared = best.sharedInfo;
+    best.sharedSaved = size(base) - size(best);
   } else best.shared = [];
-  best.inlinedSize = size(base);
   delete best.stats; delete best.sharedInfo; delete base.stats; delete base.sharedInfo;
   return best;
 }
@@ -216,12 +238,12 @@ function checkNames(ast) {
   const lookup = name => { for (let i = scopes.length - 1; i >= 0; i--) { const b = scopes[i].get(name); if (b) return b; } return null; };
   const isFn = n => n && (n.type === "FunctionDeclaration" || n.type === "FunctionExpression" || n.type === "ArrowFunctionExpression");
   // var and function declarations belong to the function scope, let / const to the block
-  function hoistVars(n, fnScope) {
+  function hoistVars(n) {
     if (!n || typeof n !== "object") return;
-    if (Array.isArray(n)) { n.forEach(x => hoistVars(x, fnScope)); return; }
+    if (Array.isArray(n)) { n.forEach(hoistVars); return; }
     if (n.type === "VariableDeclaration" && n.kind === "var") n.declarations.forEach(d => declare(d.id, "var", d));
     if (isFn(n)) return;
-    for (const k in n) if (k !== "loc" && n[k] && typeof n[k] === "object") hoistVars(n[k], fnScope);
+    for (const k in n) if (k !== "loc" && n[k] && typeof n[k] === "object") hoistVars(n[k]);
   }
   function hoistBlock(stmts) {
     for (const st of stmts) {
@@ -240,7 +262,7 @@ function checkNames(ast) {
     for (const p of n.params) {
       if (p.type === "AssignmentPattern") { walk(p.right); declare(p.left, "param", p); } else declare(p, "param", p);
     }
-    if (n.body.type === "BlockStatement") { hoistVars(n.body.body, true); hoistBlock(n.body.body); n.body.body.forEach(walk); }
+    if (n.body.type === "BlockStatement") { hoistVars(n.body.body); hoistBlock(n.body.body); n.body.body.forEach(walk); }
     else walk(n.body);
     scopes.pop();
   }
@@ -252,6 +274,10 @@ function checkNames(ast) {
       case "FunctionDeclaration": fn(n); return;
       case "FunctionExpression": case "ArrowFunctionExpression": fn(n); return;
       case "BlockStatement": scopes.push(new Map()); hoistBlock(n.body); n.body.forEach(walk); scopes.pop(); return;
+      case "SwitchStatement":   // the cases share one block scope
+        walk(n.discriminant); scopes.push(new Map()); hoistBlock(n.cases.flatMap(c => c.consequent));
+        for (const c of n.cases) { walk(c.test); c.consequent.forEach(walk); }
+        scopes.pop(); return;
       case "ForStatement": case "ForOfStatement": case "ForInStatement":
         scopes.push(new Map());
         for (const k of ["init", "left"]) if (n[k] && n[k].type === "VariableDeclaration" && n[k].kind !== "var") n[k].declarations.forEach(d => declare(d.id, n[k].kind, d));
@@ -274,7 +300,7 @@ function checkNames(ast) {
     for (const k in n) if (k !== "loc" && k !== "type" && n[k] && typeof n[k] === "object") walk(n[k]);
   }
   scopes.push(new Map());
-  hoistVars(ast.body, true); hoistBlock(ast.body); ast.body.forEach(walk);
+  hoistVars(ast.body); hoistBlock(ast.body); ast.body.forEach(walk);
   for (const b of all) if (b.reads === 0 && (b.kind === "let" || b.kind === "const" || b.kind === "var") && !b.name.startsWith("_"))
     warnings.push({ msg: `"${b.name}" is never used`, loc: locOf(b.node.id || b.node) });
   return { errors, warnings };
@@ -291,6 +317,8 @@ class Compiler {
     this.tech = new Set();
     this.shareSet = opts.share instanceof Set ? opts.share : new Set();
     this.stats = new Map();       // function key -> {key, name, count, size, shareable, ctx: Set}
+    this.baseStats = opts.baseStats || null;   // the counting run's stats (set in the sharing trials)
+    this.labels = null;           // labels of the statement being compiled (taken by the loop they name)
     this.sharedMode = 0;          // > 0 while compiling the body of a shared function
   }
   warn(msg, node) { this.warnings.push({ msg, loc: locOf(node) }); }
@@ -304,7 +332,7 @@ class Compiler {
       const m = d.match(/^use program\s+([\w-]+)/);
       if (m) mainName = m[1];
     }
-    this.global = new Scope(null, null);
+    this.global = new Scope(null, true);
     this.queue = [];
     const main = this.newProgram(mainName, []);
     // hoist functions; "use program" functions become separate programs
@@ -313,7 +341,7 @@ class Compiler {
     guard(() => this.compileProgram(main, body, this.global, null));
     while (this.queue.length) {
       const job = this.queue.shift();
-      guard(() => this.compileProgram(job.b, job.fn.body.body, new Scope(this.global, job), job));
+      guard(() => this.compileProgram(job.b, job.fn.body.body, new Scope(this.global, true), job));
     }
     if (this.errors.length) {
       const first = this.errors[0], err = new CompileError(first.msg, null);
@@ -326,7 +354,7 @@ class Compiler {
     }
     const sharedInfo = [];
     for (const b of this.programs) for (const sh of b.shared.values())
-      sharedInfo.push({ program: b.name, name: sh.bind.name, calls: sh.sites.length, entry: sh.tag });
+      if (sh.sites.length) sharedInfo.push({ program: b.name, name: sh.bind.name, calls: sh.sites.length, tag: sh.tag });
     return { programs, warnings: this.warnings, tech: [...this.tech], stats: this.stats, sharedInfo };
   }
 
@@ -347,7 +375,8 @@ class Compiler {
       }
     }
   }
-  declareFn(name, fn, scope, node) {
+  // closure: the scope the body resolves its free names in (a function passed as an argument keeps the caller's)
+  declareFn(name, fn, scope, node, closure = scope) {
     if (fn.body.type !== "BlockStatement") fn = { ...fn, body: { type: "BlockStatement", body: [{ type: "ReturnStatement", argument: fn.body, loc: fn.body.loc }], loc: fn.body.loc } };
     for (const p of fn.params) if (p.type !== "Identifier" && !(p.type === "AssignmentPattern" && p.left.type === "Identifier"))
       fail("function parameters must be plain names (defaults allowed)", p);
@@ -356,22 +385,23 @@ class Compiler {
     if (m) {
       if (scope !== this.global) fail('"use program" functions must be declared at the top level', node);
       const progName = m[1] || name;
-      const params = fn.params.map(p => p.type === "Identifier" ? p.name : p.left.name);
+      const params = fn.params.map(paramName);
       const b = this.newProgram(progName, params);
       const job = { b, fn, name: progName, params };
       this.queue.push(job);
       scope.map.set(name, { kind: "prog", job });
     } else {
-      scope.map.set(name, { kind: "fn", fn, scope, name, noShare: d === "use inline" });
+      scope.map.set(name, { kind: "fn", fn, scope: closure, name, noShare: d === "use inline" });
     }
   }
 
   compileProgram(b, stmts, scope, job) {
-    this.b = b; this.scope = scope; this.loops = []; this.fnStack = []; this.inlining = [];
+    this.b = b; this.scope = scope; this.loops = []; this.inlining = []; this.labels = null;
     this.ctx = { kind: "program", job };
     if (job) {
       // parameters arrive as the start node's variables
       for (const name of job.params) this.bindVar(scope, name, job.fn, true);
+      for (const st of stmts) this.hoist(st, scope);
     }
     this.block(stmts);
     b.drop();
@@ -390,34 +420,49 @@ class Compiler {
       if (BUILTIN_VARS.includes(name)) { this.warn(`"${jsName}" is a built-in variable; the local is renamed`, node); name = jsName + "_";}
       let k = 2;
       const base = name;
-      const taken = n => this.b.live.get(n) || BUILTIN_VARS.includes(n) || this.b.reserved.has(n) || (this.sharedMode && this.b.everNames.has(n));
+      // names of the form _t1 / _f_t1 belong to the compiler's temporaries
+      const taken = n => this.b.live.get(n) || BUILTIN_VARS.includes(n) || this.b.reserved.has(n) || TEMP_NAME.test(n) ||
+        (this.sharedMode && this.b.everNames.has(n));
       while (taken(name)) name = `${base}_${k++}`;
     }
     this.b.everNames.add(name);
-    const bind = { kind: "var", name };
+    const bind = { kind: "var", name, prog: this.b };
     scope.map.set(jsName, bind);
     this.b.live.set(name, (this.b.live.get(name) || 0) + 1);
     (scope.owned || (scope.owned = [])).push(name);
     return bind;
   }
-  pushScope() { this.scope = new Scope(this.scope, this.scope.owner); }
+  pushScope() { this.scope = new Scope(this.scope); }
   popScope() {
     for (const n of this.scope.owned || []) this.b.live.set(n, this.b.live.get(n) - 1);
     this.scope = this.scope.parent;
   }
   resolve(name, node) {
-    const bnd = this.scope.lookup(name);
+    const bnd = this.lookupVar(name, node);
     if (bnd) return bnd;
     if (BUILTIN_VARS.includes(name)) return { kind: "builtin", name };
     if (ENUMS[name]) return { kind: "enum", name };
     if (name === "undefined") return { kind: "const", value: { k: "num", v: 0 } };
     fail(`"${name}" is not defined`, node);
   }
+  // scope lookup; a variable of another program (a "use program" function reading the main program's let) is an error
+  lookupVar(name, node) {
+    const bnd = this.scope.lookup(name);
+    if (bnd && bnd.kind === "var" && bnd.prog && bnd.prog !== this.b)
+      fail(`"${name}" belongs to program ${bnd.prog.name}; pass it as a parameter`, node);
+    return bnd;
+  }
+  // compile-time type of a game variable: "num" | "cell" | "any" | {outcome: node type} (a stored outcome index)
   setType(name, op) {
     const t = op.cell != null ? "cell" : op.num != null ? "num" : (this.b.types.get(op.var) || (op.var === "scan_cell_front" || op.var === "scan_cell_back" ? "cell" : "num"));
+    this.mergeType(name, t);
+  }
+  mergeType(name, t) {
     const cur = this.b.types.get(name);
-    const tt = typeof t === "object" ? "num" : t;
-    this.b.types.set(name, cur && cur !== tt ? "any" : tt);
+    const key = x => typeof x === "object" ? "outcome:" + x.outcome : x;
+    // an outcome variable declared as `let r = 0` first keeps its outcome type; other mixes are "any"
+    const merged = !cur || key(cur) === key(t) ? t : typeof t === "object" && cur === "num" ? t : typeof cur === "object" && t === "num" ? cur : "any";
+    this.b.types.set(name, merged);
   }
   typeOf(op) {
     if (op.cell != null) return "cell";
@@ -501,6 +546,7 @@ class Compiler {
       }
       case "CallExpression": {
         const m = mathName(e);
+        if (m) checkMathArity(m, e);
         if (m && ["abs", "min", "max", "floor", "ceil", "round", "trunc", "sign", "sqrt"].includes(m)) {
           const args = e.arguments.map(a => this.constEval(a));
           if (args.every(a => a && a.k === "num")) return { k: "num", v: Math[m](...args.map(a => a.v)) };
@@ -524,7 +570,7 @@ class Compiler {
     if (!this.collect) { try { this.stmtInner(s); } finally { this.b.temps = tempMark; } return; }
     // collecting diagnostics: a failed statement is recorded and skipped, the rest is still checked
     const saved = { scope: this.scope, loops: this.loops, nLoops: this.loops.length, ctx: this.ctx, inlining: this.inlining,
-      nInlining: this.inlining.length, nFn: this.fnStack.length, sharedMode: this.sharedMode };
+      nInlining: this.inlining.length, sharedMode: this.sharedMode };
     try { this.stmtInner(s); }
     catch (e) { this.recover(e, saved, s); }
     finally { this.b.temps = tempMark; }
@@ -536,7 +582,7 @@ class Compiler {
     if (sc) while (this.scope !== saved.scope) this.popScope(); else this.scope = saved.scope;
     this.loops = saved.loops; this.loops.length = saved.nLoops;
     this.inlining = saved.inlining; this.inlining.length = saved.nInlining;
-    this.fnStack.length = saved.nFn; this.ctx = saved.ctx; this.sharedMode = saved.sharedMode;
+    this.ctx = saved.ctx; this.sharedMode = saved.sharedMode; this.labels = null;
     this.b.pending = [];
     // names declared by a failed declaration still exist, so later uses don't report "not defined"
     if (s && s.type === "VariableDeclaration") for (const d of s.declarations)
@@ -572,12 +618,13 @@ class Compiler {
         return;
       }
       case "WhileStatement": {
+        const labels = this.takeLabels();   // before the condition: it may inline a function with loops of its own
         { const k = this.constEval(s.test); if (k && !truthy(k)) return; }
         const head = new Label();
         b.place(head);
         const c = this.cond(s.test);
         b.pending = c.t;
-        const loop = this.pushLoop(s, head);
+        const loop = this.pushLoop(s, head, labels);
         this.stmt(s.body);
         b.jump(head, s);
         this.loops.pop();
@@ -585,9 +632,10 @@ class Compiler {
         return;
       }
       case "DoWhileStatement": {
+        const labels = this.takeLabels();
         const head = new Label(), cont = new Label();
         b.place(head);
-        const loop = this.pushLoop(s, cont);
+        const loop = this.pushLoop(s, cont, labels);
         this.stmt(s.body);
         this.loops.pop();
         b.place(cont);
@@ -597,6 +645,7 @@ class Compiler {
         return;
       }
       case "ForStatement": {
+        const labels = this.takeLabels();
         this.pushScope();
         if (s.init) { if (s.init.type === "VariableDeclaration") this.varDecl(s.init); else this.exprStmt(s.init); }
         { const k = s.test && this.constEval(s.test); if (k && !truthy(k)) { this.popScope(); return; } }
@@ -604,7 +653,7 @@ class Compiler {
         b.place(head);
         const c = s.test ? this.cond(s.test) : { t: b.pending, f: [] };
         b.pending = c.t;
-        const loop = this.pushLoop(s, s.update ? cont : head);
+        const loop = this.pushLoop(s, s.update ? cont : head, labels);
         this.stmt(s.body);
         this.loops.pop();
         if (s.update) { b.place(cont); this.exprStmt(s.update); }
@@ -626,16 +675,20 @@ class Compiler {
         return;
       }
       case "LabeledStatement": {
-        this.nextLabel = s.label.name;
-        if (!/^(While|DoWhile|For|ForOf)Statement$/.test(s.body.type)) {
+        // A: B: while (…) — every label of the chain names the loop
+        const labels = [s.label.name];
+        let body = s.body;
+        while (body.type === "LabeledStatement") { labels.push(body.label.name); body = body.body; }
+        if (!/^(While|DoWhile|For|ForOf)Statement$/.test(body.type)) {
           // labelled block: break label; jumps to its end
-          const loop = this.pushLoop(s.body, null); loop.label = s.label.name; loop.blockOnly = true; this.nextLabel = null;
-          this.stmt(s.body);
+          const loop = this.pushLoop(body, null, labels); loop.blockOnly = true;
+          this.stmt(body);
           this.loops.pop();
           b.pending = b.pending.concat(loop.breaks);
           return;
         }
-        return this.stmt(s.body);
+        this.labels = labels;   // taken by the loop statement before it compiles anything
+        return this.stmt(body);
       }
       case "SwitchStatement": return this.switchStmt(s);
       case "ReturnStatement": return this.returnStmt(s);
@@ -643,16 +696,16 @@ class Compiler {
       default: fail(`${s.type.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase()} is not supported`, s);
     }
   }
-  pushLoop(node, cont) {
-    const loop = { node, cont, breaks: [], contRefs: [], label: this.nextLabel || null };
-    this.nextLabel = null;
+  takeLabels() { const l = this.labels || []; this.labels = null; return l; }
+  pushLoop(node, cont, labels = []) {
+    const loop = { node, cont, breaks: [], contRefs: [], labels };
     this.loops.push(loop);
     return loop;
   }
   findLoop(s, isContinue) {
     for (let i = this.loops.length - 1; i >= 0; i--) {
       const l = this.loops[i];
-      if (s.label ? l.label === s.label.name : !l.blockOnly && !l.switch) {
+      if (s.label ? l.labels.includes(s.label.name) : !l.blockOnly && !l.switch) {
         if (isContinue && (l.blockOnly || l.switch)) continue;
         return l;
       }
@@ -661,6 +714,7 @@ class Compiler {
     fail(`${isContinue ? "continue" : "break"} outside of a loop${s.label ? ` labelled ${s.label.name}` : ""}`, s);
   }
 
+  // var is treated like let: block-scoped, and reset to 0 on every entry when it has no initialiser
   varDecl(s) {
     for (const d of s.declarations) {
       if (d.id.type !== "Identifier") fail("destructuring is not supported", d.id);
@@ -681,12 +735,12 @@ class Compiler {
   }
 
   forOf(s) {
-    const b = this.b;
+    const b = this.b, labels = this.takeLabels();
     if (s.left.type !== "VariableDeclaration" || s.left.declarations[0].id.type !== "Identifier") fail("for…of needs `const name of [...]`", s.left);
     const arr = this.constEval(s.right);
     if (!arr || arr.k !== "arr") fail("for…of is unrolled at compile time: the array must be a constant", s.right);
     const name = s.left.declarations[0].id.name;
-    const loop = this.pushLoop(s, null);
+    const loop = this.pushLoop(s, null, labels);
     for (const item of arr.v) {
       this.pushScope();
       this.scope.map.set(name, { kind: "const", value: item });
@@ -727,6 +781,7 @@ class Compiler {
         const key = this.constOf(c.test, "case", ["str"]).v;
         let i = keys.indexOf(normKey(key)); if (i < 0) i = labels.indexOf(normKey(key));
         if (i < 0) fail(`"${key}" is not an outcome of ${T[t].label} (${T[t].outs.map(o => o[0]).join(", ")})`, c.test);
+        if (used.has(i)) { this.warn(`duplicate case "${key}": the earlier case already takes this outcome`, c.test); return; }
         used.add(i); caseRefs[k].push(new Hole(b, id, i));
       });
       rest = T[t].outs.map((_, i) => i).filter(i => !used.has(i) && !(ERROR_OUTS[t] || []).includes(i)).map(i => new Hole(b, id, i));
@@ -749,10 +804,10 @@ class Compiler {
     });
     if (start < 0) start = cases.findIndex(c => !c.test);
     if (start < 0) return;
-    const loop = { node: s, breaks: [], contRefs: [], label: this.nextLabel || null, switch: true };
-    this.nextLabel = null;
+    const loop = { node: s, breaks: [], contRefs: [], labels: [], switch: true };   // a labelled switch is a labelled block
     this.loops.push(loop);
     this.pushScope();
+    this.hoistCases(s);
     for (let k = start; k < cases.length; k++) {
       this.block(cases[k].consequent);
       if (!b.pending.length) break;     // break (or halt): the later cases are not reached
@@ -780,12 +835,14 @@ class Compiler {
     const rest = b.pending; b.pending = [];
     return this.switchBodies(s, caseRefs, rest);
   }
+  // the cases of a switch share one block scope: hoist its function declarations
+  hoistCases(s) { for (const c of s.cases) for (const st of c.consequent) this.hoist(st, this.scope); }
   switchBodies(s, caseRefs, rest) {
     const b = this.b;
-    const loop = { node: s, breaks: [], contRefs: [], label: this.nextLabel || null, switch: true };
-    this.nextLabel = null;
+    const loop = { node: s, breaks: [], contRefs: [], labels: [], switch: true };
     this.loops.push(loop);
     this.pushScope();
+    this.hoistCases(s);
     let fall = [];
     const def = s.cases.findIndex(c => !c.test);
     s.cases.forEach((c, k) => {
@@ -819,7 +876,7 @@ class Compiler {
       ctx.exits.push(...b.pending); b.pending = [];
     } else if (ctx.kind === "value") {
       if (s.argument) this.assignTo(ctx.ret, s.argument, s);
-      else { b.emit("assign", { varname: ctx.ret, value: { num: 0 } }, s); this.tech.add("Variables"); b.pending = [new Hole(b, b.nodes.length - 1, 0)]; }
+      else this.emitAssign(ctx.ret, { num: 0 }, s);
       ctx.exits.push(...b.pending); b.pending = [];
     } else if (ctx.kind === "cond") {
       if (!s.argument) { ctx.f.push(...b.pending); b.pending = []; return; }
@@ -844,6 +901,7 @@ class Compiler {
       case "Literal": case "Identifier": return;
       case "LogicalExpression": case "ConditionalExpression": {
         // a && b(); used as a statement
+        noNullish(e);
         const test = e.type === "LogicalExpression" ? e.left : e.test;
         const k = this.constEval(test);
         if (k) {
@@ -869,10 +927,10 @@ class Compiler {
   callStmt(e) {
     const b = this.b;
     const name = calleeName(e);
-    const bind = name && !e.callee.object ? this.scope.lookup(name) : null;
+    const bind = name ? this.scope.lookup(name) : null;
     if (bind && bind.kind === "fn") { this.inline(bind, e, { kind: "stmt", exits: [] }); return; }
     if (bind && bind.kind === "prog") { const id = this.callProgram(bind.job.name, bind.job.params.length, e.arguments, e); b.pending = b.holes(id, [0, 1]); return; }
-    if (name === "log" || (e.callee.type === "MemberExpression" && e.callee.object.name === "console")) { this.warn("log() has no node; ignored", e); return; }
+    if ((name === "log" && !bind) || (e.callee.type === "MemberExpression" && e.callee.object.name === "console")) { this.warn("log() has no node; ignored", e); return; }
     if (!bind) checkArity(name, e);
     if (name === "halt" && !bind) { b.drop(); return; }
     if ((name === "exit" || name === "fail") && !bind) {
@@ -893,8 +951,8 @@ class Compiler {
     if ((name === "anyOf" || name === "inCategory") && !bind) {
       const c = this.cond(e); b.pending = c.t.concat(c.f); return;
     }
-    if (mathName(e)) { this.warn("result unused", e); return; }
-    fail(`unknown function ${name || "call"}()`, e.callee);
+    if (MATH_ARITY[mathName(e)]) { checkMathArity(mathName(e), e); this.warn("result unused", e); return; }
+    fail(`unknown function ${calleeText(e.callee) || "call"}()`, e.callee);
   }
 
   // ------------------------------------------------------------ builtin nodes
@@ -917,7 +975,9 @@ class Compiler {
       case "turnLeft": case "turnRight": case "turnAround": return one("rotR", { dir: ROT_NAMES[name] });
       case "turn": {
         const c = this.constEval(args[0] || {});
-        if (!c) return this.dispatch(this.value(args[0]), [-135, -90, -45, 45, 90, 135, 180], d => one("rotR", { dir: d === 180 ? 4 : d / 45 }), e);
+        // each choice also matches its value ± 360 (so 270 turns -90, like the constant form)
+        if (!c) return this.dispatch(this.value(args[0]), [-135, -90, -45, 45, 90, 135, 180].map(d => [d, d < 0 ? d + 360 : d - 360]),
+          d => one("rotR", { dir: d === 180 ? 4 : d / 45 }), e);
         if (c.k !== "num") fail("turn(degrees) needs a number", args[0]);
         let deg = ((c.v % 360) + 540) % 360 - 180;    // -180..180
         if (deg === -180) deg = 180;
@@ -927,7 +987,8 @@ class Compiler {
       }
       case "rotateTo": {
         const c = this.constEval(args[0] || {});
-        if (!c) return this.dispatch(this.value(args[0]), [0, 1, 2, 3, 4, 5, 6, 7], d => one("rotA", { dir: d }), e);
+        // each direction also matches its value ± 8 (-1 is Dir.NE, 9 is Dir.SE, like the constant form)
+        if (!c) return this.dispatch(this.value(args[0]), [0, 1, 2, 3, 4, 5, 6, 7].map(d => [d, d - 8, d + 8]), d => one("rotA", { dir: d }), e);
         if (c.k !== "num" || !Number.isInteger(c.v)) fail("rotateTo() takes a direction: Dir.E, Dir.SE, … or 0..7", args[0]);
         return one("rotA", { dir: ((c.v % 8) + 8) % 8 });
       }
@@ -950,22 +1011,21 @@ class Compiler {
       }
     }
   }
-  // value -> one of several constant-parameter nodes, via a chain of EQ nodes
+  // value -> one of several constant-parameter nodes, via a chain of EQ nodes. choices: [[node value, ...matching values]].
+  // A value that matches no choice does nothing and goes on to the next statement.
   dispatch(val, choices, emitOne, e) {
     const b = this.b;
     if (val.num != null) fail("internal: dispatch on a constant", e);
     const ends = [];
-    choices.forEach((ch, k) => {
-      if (k < choices.length - 1) {
-        const id = b.emit("eq", { value: val, set: [{ num: ch }] }, e);
-        this.tech.add("Variables");
-        b.pending = [new Hole(b, id, 0)];
-        emitOne(ch); ends.push(...b.pending);
-        b.pending = [new Hole(b, id, 1)];
-      } else { emitOne(ch); ends.push(...b.pending); }
-    });
-    b.pending = ends;
-    this.warn(`a variable argument becomes ${choices.length - 1} EQ nodes + ${choices.length} fixed nodes`, e);
+    for (const set of choices) {
+      const id = b.emit("eq", { value: val, set: set.map(v => ({ num: v })) }, e);
+      this.tech.add("Variables");
+      b.pending = [new Hole(b, id, 0)];
+      emitOne(set[0]); ends.push(...b.pending);
+      b.pending = [new Hole(b, id, 1)];
+    }
+    b.pending = ends.concat(b.pending);
+    this.warn(`a variable argument becomes ${choices.length} EQ nodes + ${choices.length} fixed nodes; any other value does nothing`, e);
   }
 
   outcomeNode(name, e) {
@@ -1008,13 +1068,13 @@ class Compiler {
   outcomeSource(e) {
     if (e.type === "CallExpression") {
       const name = calleeName(e);
-      const bind = name && !e.callee.object ? this.scope.lookup(name) : null;
+      const bind = name ? this.scope.lookup(name) : null;
       if (bind && bind.kind === "prog") return { id: this.callProgram(bind.job.name, bind.job.params.length, e.arguments, e), t: "call" };
       if (!bind && OUTCOME_FUNS.has(name)) return this.outcomeNode(name, e);
       return null;
     }
     if (e.type === "Identifier") {
-      const bind = this.scope.lookup(e.name);
+      const bind = this.lookupVar(e.name, e);
       if (bind && bind.kind === "var") { const t = this.b.types.get(bind.name); if (t && typeof t === "object") return { t: t.outcome, viaVar: bind.name }; }
     }
     return null;
@@ -1033,22 +1093,40 @@ class Compiler {
     st.count++; st.ctx.add(ctx.kind);
     if (this.shareSet.has(key) && shareable && this.sharedCall(bind, e, ctx, key, sig)) return;
     const before = b.nodes.length;
-    try { return this.inlineBody(bind, e, ctx); } finally { st.size = Math.max(st.size, b.nodes.length - before); }
+    try { return this.inlineBody(bind, e, ctx); }
+    finally {
+      st.size = Math.max(st.size, b.nodes.length - before);
+      // a returned outcome is a stored output index, read through its type at the call site; a shared copy's <fn>_rv
+      // has no such type, so a function that returns outcomes to a value is never shared
+      if (ctx.kind === "value") { const rt = b.types.get(ctx.ret); if (rt && (typeof rt === "object" || rt === "any")) st.shareable = false; }
+    }
   }
   callKey(bind, e) {
     const fn = bind.fn, assigned = assignedNames(fn.body);
-    let shareable = !bind.noShare;
+    // a function declared inside another one closes over a scope that differs from call to call: never shared
+    let shareable = !bind.noShare && bind.scope.top;
+    const pscope = new Scope(bind.scope);   // the earlier parameters, which default values can read
     const sig = fn.params.map((p, i) => {
-      const pname = p.type === "Identifier" ? p.name : p.left.name;
-      const a = e.arguments[i] || (p.type === "AssignmentPattern" ? p.right : null);
-      if (!a) return { k: "num", v: 0 };
-      if (a.type === "ArrowFunctionExpression" || a.type === "FunctionExpression") { shareable = false; return "fn"; }
-      if (a.type === "Identifier") { const ab = this.scope.lookup(a.name); if (ab && (ab.kind === "fn" || ab.kind === "prog")) { shareable = false; return "fn"; } }
-      const c = this.constEval(a);
-      return c && !assigned.has(pname) ? c : "*";
+      const pname = paramName(p), given = e.arguments[i];
+      const a = given || (p.type === "AssignmentPattern" ? p.right : null);
+      let r = null;
+      if (!a) r = { k: "num", v: 0 };
+      else if (isFnExpr(a)) r = "fn";
+      else {
+        if (a.type === "Identifier") { const ab = (given ? this.scope : pscope).lookup(a.name); if (ab && (ab.kind === "fn" || ab.kind === "prog")) r = "fn"; }
+        if (!r) {
+          const c = given ? this.constEval(a) : this.inScope(pscope, () => this.constEval(a));
+          r = c && !assigned.has(pname) ? c : "*";
+          if (!given && r === "*") shareable = false;   // a computed default is evaluated in the callee: inline only
+        }
+      }
+      if (r === "fn") shareable = false;
+      pscope.map.set(pname, typeof r === "object" ? { kind: "const", value: r } : { kind: "var", name: null });
+      return r;
     });
     return { key: `${this.b.name}|${fn.start}:${fn.end}|${JSON.stringify(sig)}`, sig, shareable };
   }
+  inScope(scope, f) { const s = this.scope; this.scope = scope; try { return f(); } finally { this.scope = s; } }
 
   // ------------------------------------------------------------ shared functions (compiled once, called through a dispatch)
   // A call copies the non-constant arguments into the function's own variables, writes its site number into
@@ -1058,13 +1136,15 @@ class Compiler {
     const b = this.b;
     let sh = b.shared.get(key);
     if (!sh) {
-      const st = this.stats.get(key);
+      // the mode comes from every call of the counting run, so it doesn't depend on which call comes first
+      const st = (this.baseStats && this.baseStats.get(key)) || this.stats.get(key);
       const mode = st.ctx.has("value") ? "value" : st.ctx.has("cond") ? "cond" : "stmt";
       const n = [...b.shared.values()].filter(x => x.bind.name === bind.name).length;
       const tag = this.freeName(bind.name + (n ? n + 1 : ""));
+      b.tags.add(tag);
       sh = { key, bind, sig, mode, tag, sites: [], entry: new Label(), compiled: false,
         ret: this.reserve(`${tag}_ret`), rv: mode === "value" ? this.reserve(`${tag}_rv`) : null,
-        params: bind.fn.params.map((p, i) => sig[i] === "*" ? this.reserve(`${tag}_${p.type === "Identifier" ? p.name : p.left.name}`) : null) };
+        params: bind.fn.params.map((p, i) => sig[i] === "*" ? this.reserve(`${tag}_${paramName(p)}`) : null) };
       b.shared.set(key, sh);
     }
     if (ctx.kind === "value" && sh.mode !== "value") return false;   // not expected from the counting run: inline it
@@ -1072,7 +1152,7 @@ class Compiler {
     if (this.inlining.includes(bind)) fail(`${bind.name}() is recursive`, e);
     // arguments first (they may call the function themselves), then the parameter copies
     const fn = bind.fn;
-    const ops = fn.params.map((p, i) => sh.params[i] ? this.value(e.arguments[i] || p.right) : null);
+    const ops = fn.params.map((p, i) => sh.params[i] ? this.value(e.arguments[i]) : null);
     ops.forEach((op, i) => { if (op) this.emitAssign(sh.params[i], op, e); });
     const id = sh.sites.length;
     this.emitAssign(sh.ret, { num: id }, e);
@@ -1087,7 +1167,7 @@ class Compiler {
     sh.sites.push({ L });
     b.pending = [L];
     if (ctx.kind === "value") this.emitAssign(ctx.ret, { var: sh.rv }, e);
-    else if (ctx.kind === "cond") {   // value-returning function used as a condition
+    else if (ctx.kind === "cond") {   // value-returning function used as a condition (never an outcome: see inline)
       const q = b.emit("eq", { value: { var: sh.rv }, set: [{ num: 0 }] }, e); this.tech.add("Variables");
       ctx.t.push(...b.holes(q, [1])); ctx.f.push(...b.holes(q, [0])); b.pending = [];
     }
@@ -1096,7 +1176,7 @@ class Compiler {
   reserve(name) { const n = this.freeName(name); this.b.reserved.add(n); this.b.everNames.add(n); return n; }
   freeName(base) {
     let name = base, k = 2;
-    while (this.b.everNames.has(name) || this.b.reserved.has(name) || BUILTIN_VARS.includes(name)) name = `${base}_${k++}`;
+    while (this.b.everNames.has(name) || this.b.reserved.has(name) || this.b.tags.has(name) || BUILTIN_VARS.includes(name)) name = `${base}_${k++}`;
     return name;
   }
   compileShared(sh) {
@@ -1105,10 +1185,9 @@ class Compiler {
     b.pending = [];
     b.place(sh.entry);
     const saved = { scope: this.scope, loops: this.loops, ctx: this.ctx, inlining: this.inlining, prefix: b.tempPrefix, temps: b.temps };
-    const scope = new Scope(sh.bind.scope, null);
+    const scope = new Scope(sh.bind.scope);
     fn.params.forEach((p, i) => {
-      const pname = p.type === "Identifier" ? p.name : p.left.name;
-      scope.map.set(pname, sh.params[i] ? { kind: "var", name: sh.params[i] } : { kind: "const", value: sh.sig[i] });
+      scope.map.set(paramName(p), sh.params[i] ? { kind: "var", name: sh.params[i], prog: b } : { kind: "const", value: sh.sig[i] });
     });
     const ctx = sh.mode === "cond" ? { kind: "cond", t: [], f: [] } : { kind: sh.mode, exits: [], ret: sh.rv };
     this.scope = scope; this.loops = []; this.ctx = ctx; this.inlining = [sh.bind];
@@ -1117,6 +1196,7 @@ class Compiler {
     try {
       for (const st of fn.body.body) this.hoist(st, scope);
       this.block(fn.body.body);
+      if (ctx.kind === "value" && b.pending.length) this.emitAssign(ctx.ret, { num: 0 }, fn.body);   // fell off the end
     } finally {
       this.sharedMode--;
       this.scope = saved.scope; this.loops = saved.loops; this.ctx = saved.ctx; this.inlining = saved.inlining;
@@ -1147,46 +1227,45 @@ class Compiler {
       tree(sh.exitF, sh.sites.map(s => s.fL || s.L));
     } else tree(sh.exits, sh.sites.map(s => s.L));
   }
+  // How a parameter gets its argument, decided in the current scope: {bind} (a constant, a function or a variable
+  // used as is), {fn, closure} (a function expression) or {op} (a value copied into the parameter's own variable).
+  argBinding(fn, pname, a, assigned) {
+    const c = this.constEval(a);
+    if (c && !assigned.has(pname)) return { bind: { kind: "const", value: c } };
+    if (isFnExpr(a)) return { fn: a, closure: this.scope };
+    if (a.type === "Identifier") {
+      const ab = this.lookupVar(a.name, a);
+      if (ab && (ab.kind === "fn" || ab.kind === "prog")) return { bind: ab };
+      // a plain variable can be shared (no copy) only if the call can't change it: the parameter is never assigned,
+      // the body assigns no outer variable and calls no user function. System variables always get a copy
+      // (x, y, dir, rnd, scan_* change as the program runs).
+      if (ab && ab.kind === "var" && !assigned.has(pname) && !assignsOuter(fn.body) && !callsUserFn(fn.body)) return { bind: ab };
+    }
+    return { op: this.value(a) };
+  }
   inlineBody(bind, e, ctx) {
     const b = this.b;
     const fn = bind.fn;
-    // bind parameters: constants stay constants, the rest are copied into variables
-    const scope = new Scope(bind.scope, ctx);
+    const scope = new Scope(bind.scope);
     const assigned = assignedNames(fn.body);
-    const argVals = fn.params.map((p, i) => {
-      const a = e.arguments[i] || (p.type === "AssignmentPattern" ? p.right : null);
-      return a;
-    });
+    // the given arguments are evaluated in the caller's scope first; default values later, in the callee's, in order
+    const plans = fn.params.map((p, i) => e.arguments[i] ? this.argBinding(fn, paramName(p), e.arguments[i], assigned) : null);
     const saved = { scope: this.scope, loops: this.loops, ctx: this.ctx };
-    const pendingBinds = [];
-    fn.params.forEach((p, i) => {
-      const pname = p.type === "Identifier" ? p.name : p.left.name;
-      const a = argVals[i];
-      if (!a) { scope.map.set(pname, { kind: "const", value: { k: "num", v: 0 } }); return; }
-      const c = this.constEval(a);
-      if (c && !assigned.has(pname)) { scope.map.set(pname, { kind: "const", value: c }); return; }
-      if (a.type === "ArrowFunctionExpression" || a.type === "FunctionExpression") { this.declareFn(pname, a, scope, a); return; }
-      if (a.type === "Identifier") {
-        const ab = this.scope.lookup(a.name);
-        if (ab && (ab.kind === "fn" || ab.kind === "prog" || ab.kind === "const")) { scope.map.set(pname, ab); return; }
-        // a plain variable can be shared (no copy) only if the call can't change it: the parameter is never assigned,
-        // the body assigns no outer variable and calls no user function. System variables always get a copy
-        // (x, y, dir, rnd, scan_* change as the program runs).
-        if (ab && ab.kind === "var" && !assigned.has(pname) && !assignsOuter(fn.body) && !callsUserFn(fn.body)) { scope.map.set(pname, ab); return; }
-      }
-      pendingBinds.push([pname, a]);
-    });
-    // evaluate copied arguments in the caller's scope, then bind them in the callee's
-    const copies = pendingBinds.map(([pname, a]) => [pname, this.value(a), a]);
     this.scope = scope; this.loops = []; this.ctx = ctx;
     this.inlining.push(bind);
     try {
-      for (const [pname, op, a] of copies) {
-        const vb = this.bindVar(scope, pname, a);
-        this.emitAssign(vb.name, op, a);
-      }
+      fn.params.forEach((p, i) => {
+        const pname = paramName(p);
+        let plan = plans[i];
+        if (!plan) plan = p.type === "AssignmentPattern" ? this.argBinding(fn, pname, p.right, assigned) : { bind: { kind: "const", value: { k: "num", v: 0 } } };
+        const node = e.arguments[i] || p;
+        if (plan.bind) scope.map.set(pname, plan.bind);
+        else if (plan.fn) this.declareFn(pname, plan.fn, scope, plan.fn, plan.closure);
+        else { const vb = this.bindVar(scope, pname, node); this.emitAssign(vb.name, plan.op, node); }
+      });
       for (const st of fn.body.body) this.hoist(st, scope);
       this.block(fn.body.body);
+      if (ctx.kind === "value" && b.pending.length) this.emitAssign(ctx.ret, { num: 0 }, fn.body);   // fell off the end: undefined
       for (const n of scope.owned || []) b.live.set(n, b.live.get(n) - 1);
     } finally {
       this.inlining.pop();
@@ -1251,7 +1330,7 @@ class Compiler {
   emitOper(target, op, l, r, node) {
     const b = this.b;
     if (this.typeOf(l) === "cell" || this.typeOf(r) === "cell") fail("arithmetic on a cell value", node);
-    if (l.num != null && r.num != null) { this.emitAssign(target, { num: foldOp(op, l.num, r.num) }, node); return; }
+    if (l.num != null && r.num != null) { this.emitAssign(target, { num: finiteNum(foldOp(op, l.num, r.num), node) }, node); return; }
     const id = b.emit("oper", { varname: target, op, left: l, right: r }, node);
     this.tech.add("Variables");
     b.types.set(target, "num");
@@ -1269,7 +1348,7 @@ class Compiler {
       ends.push(new Hole(b, a, 0));
     });
     this.tech.add("Variables");
-    b.types.set(target, { outcome: t });
+    this.mergeType(target, { outcome: t });
     b.pending = ends;
   }
   ternaryInto(target, e) {
@@ -1319,7 +1398,7 @@ class Compiler {
         const m = mathName(e);
         if (m) return this.mathCall(m, e);
         const name = calleeName(e);
-        const bind = name && !e.callee.object ? this.scope.lookup(name) : null;
+        const bind = name ? this.scope.lookup(name) : null;
         if (bind && bind.kind === "fn") {
           const t = this.b.temp();
           this.inline(bind, e, { kind: "value", exits: [], ret: t });
@@ -1327,13 +1406,18 @@ class Compiler {
         }
         const src = this.outcomeSource(e);
         if (src) { const t = this.b.temp(); this.storeOutcome(t, src, e); return { var: t }; }
+        const known = bind || isCondExpr(e) || (name && (SPECIAL_FUNS.has(name) || ACTION_FUNS.has(name))) ||
+          (e.callee.type === "MemberExpression" && !e.callee.computed && e.callee.property.name === "includes");
+        if (!known) fail(`unknown function ${calleeText(e.callee) || "call"}()`, e.callee);
         break;
       }
     }
+    noNullish(e);
     if (isCondExpr(e)) { const t = this.b.temp(); this.condInto(t, e); return { var: t }; }
     fail(`can't compute this expression in the game (${e.type})`, e);
   }
   mathCall(m, e) {
+    checkMathArity(m, e);
     const args = e.arguments;
     const t = this.b.temp();
     const b = this.b;
@@ -1378,6 +1462,7 @@ class Compiler {
         if (e.operator === "!") { const r = this.cond(e.argument); return { t: r.f, f: r.t }; }
         break;
       case "LogicalExpression": {
+        noNullish(e);
         const a = this.cond(e.left);
         if (e.operator === "&&") { b.pending = a.t; const r = this.cond(e.right); return { t: r.t, f: a.f.concat(r.f) }; }
         if (e.operator === "||") { b.pending = a.f; const r = this.cond(e.right); return { t: a.t.concat(r.t), f: r.f }; }
@@ -1412,7 +1497,7 @@ class Compiler {
       }
       case "CallExpression": {
         const name = calleeName(e);
-        const bind = name && !e.callee.object ? this.scope.lookup(name) : null;
+        const bind = name ? this.scope.lookup(name) : null;
         if (bind && bind.kind === "fn") { const ctx = { kind: "cond", t: [], f: [] }; this.inline(bind, e, ctx); return { t: ctx.t, f: ctx.f }; }
         if (!bind && name === "anyOf") {
           if (e.arguments.length < 2) fail("anyOf(value, a, b, …) needs a value and at least one candidate", e);
@@ -1428,6 +1513,7 @@ class Compiler {
           return { t: b.holes(id, [0]), f: b.holes(id, [1]) };
         }
         if (!bind && name === "inCategory") {
+          checkArity(name, e);
           const val = this.value(e.arguments[0]);
           const cat = this.constOf(e.arguments[1] || e, "inCategory() category", ["cat"]).v;
           const id = b.emit("cell", { value: val, category: cat }, e); this.tech.add("Variables");
@@ -1436,6 +1522,7 @@ class Compiler {
         if (e.callee.type === "MemberExpression" && !e.callee.computed && e.callee.property.name === "includes") {
           const arr = this.constEval(e.callee.object);
           if (arr && arr.k === "arr") {
+            checkArity("includes", e);
             const val = this.value(e.arguments[0]);
             const id = b.emit("eq", { value: val, set: arr.v.map(x => constOperand(x, e)) }, e); this.tech.add("Variables");
             return { t: b.holes(id, [0]), f: b.holes(id, [1]) };
@@ -1481,40 +1568,73 @@ class Compiler {
 // ---------------------------------------------------------------- helpers
 const ARITH = { "+": "Plus", "-": "Minus", "*": "Mult", "/": "Div", "%": "Mod" };
 function foldOp(op, a, b) { return { Plus: a + b, Minus: a - b, Mult: a * b, Div: a / b, Mod: a % b }[op]; }
+const paramName = p => p.type === "Identifier" ? p.name : p.left.name;
+const isFnExpr = a => a.type === "ArrowFunctionExpression" || a.type === "FunctionExpression";
 function isCondExpr(e) {
   return (e.type === "BinaryExpression" && ["==", "===", "!=", "!==", "<", "<=", ">", ">="].includes(e.operator)) ||
-    e.type === "LogicalExpression" || (e.type === "UnaryExpression" && e.operator === "!") ||
+    (e.type === "LogicalExpression" && e.operator !== "??") || (e.type === "UnaryExpression" && e.operator === "!") ||
     (e.type === "CallExpression" && ["anyOf", "inCategory"].includes(calleeName(e)));
 }
 function directive(st) {
   return st && st.type === "ExpressionStatement" && st.expression.type === "Literal" && typeof st.expression.value === "string" ? st.expression.value : null;
 }
+// built-in and user functions are called by a bare name; obj.step() is not step()
 function calleeName(e) {
-  if (e.callee.type === "Identifier") return e.callee.name;
-  if (e.callee.type === "MemberExpression" && !e.callee.computed) return e.callee.property.name;
+  return e.callee.type === "Identifier" ? e.callee.name : null;
+}
+function calleeText(c) {
+  if (c.type === "Identifier") return c.name;
+  if (c.type === "MemberExpression" && !c.computed) { const o = calleeText(c.object); return o && `${o}.${c.property.name}`; }
   return null;
 }
+function noNullish(e) { if (e.type === "LogicalExpression" && e.operator === "??") fail("the ?? operator is not supported", e); }
 function mathName(e) {
   return e.type === "CallExpression" && e.callee.type === "MemberExpression" && !e.callee.computed &&
     e.callee.object.type === "Identifier" && e.callee.object.name === "Math" ? e.callee.property.name : null;
 }
-// names assigned anywhere inside a function body (not inside nested functions)
+// names assigned anywhere inside a function body (not inside nested functions); `var p = …` re-declaring a name counts too
 function assignedNames(body) {
   const out = new Set();
   walk(body, n => {
     if (n.type === "AssignmentExpression" && n.left.type === "Identifier") out.add(n.left.name);
     if (n.type === "UpdateExpression" && n.argument.type === "Identifier") out.add(n.argument.name);
+    if (n.type === "VariableDeclaration" && n.kind === "var") for (const d of n.declarations) if (d.id.type === "Identifier") out.add(d.id.name);
   });
   return out;
 }
+// does the body assign a variable it doesn't declare itself? Block-aware: `{ let n; } n = 5;` assigns an outer n.
+// (var is block-scoped here, as in the compiler.) Parameters count as outer, which only costs a copy.
 function assignsOuter(body) {
-  const local = new Set();
-  walk(body, n => { if (n.type === "VariableDeclarator" && n.id.type === "Identifier") local.add(n.id.name); });
+  const scopes = [];
+  const declared = name => scopes.some(sc => sc.has(name));
+  const declsOf = stmts => {
+    const set = new Set();
+    for (const st of stmts || []) {
+      if (st && st.type === "VariableDeclaration") for (const d of st.declarations) if (d.id.type === "Identifier") set.add(d.id.name);
+      if (st && st.type === "FunctionDeclaration" && st.id) set.add(st.id.name);
+    }
+    return set;
+  };
   let outer = false;
-  walk(body, n => {
+  const visit = n => {
+    if (outer || !n || typeof n.type !== "string") return;
+    if (isFnExpr(n) || n.type === "FunctionDeclaration") return;
     const id = n.type === "AssignmentExpression" ? n.left : n.type === "UpdateExpression" ? n.argument : null;
-    if (id && id.type === "Identifier" && !local.has(id.name)) outer = true;
-  });
+    if (id && id.type === "Identifier" && !declared(id.name)) { outer = true; return; }
+    let pushed = null;
+    if (n.type === "BlockStatement") pushed = declsOf(n.body);
+    else if (n.type === "ForStatement") pushed = declsOf([n.init]);
+    else if (n.type === "ForOfStatement" || n.type === "ForInStatement") pushed = declsOf([n.left]);
+    else if (n.type === "SwitchStatement") { visit(n.discriminant); pushed = declsOf(n.cases.flatMap(c => c.consequent)); }
+    if (pushed) scopes.push(pushed);
+    for (const k of Object.keys(n)) {
+      if (k === "loc" || (n.type === "SwitchStatement" && k === "discriminant")) continue;
+      const v = n[k];
+      if (Array.isArray(v)) v.forEach(visit); else if (v && typeof v === "object") visit(v);
+    }
+    if (pushed) scopes.pop();
+  };
+  visit(body);
   return outer;
 }
 function callsUserFn(body) {

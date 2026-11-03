@@ -199,7 +199,8 @@ function terrain(W, H, rnd) {
   return { cells, ores, host: hosts[0] };
 }
 const toSeed = seed => (seed == null || !isFinite(seed) ? Math.floor(Math.random() * 1e6) : Math.floor(seed));
-// open 3x3 for the bot body, no hard rock within 4 cells
+// open 3x3 for the bot body; SinterCrust / MetallicCrust within 4 cells become host rock (other rock, also
+// ConsolidatedRock, stays)
 function clearPocket(w, bx, by, host = "Regolith") {
   const { W, H, cells } = w;
   for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) {
@@ -257,6 +258,7 @@ export const SEISMIC_DEFAULTS = {
   mix: [["Regolith", 45], ["Chondrite", 25], ["Breccia", 15], ["SilicateRock", 5], ["SulfideRock", 5], ["DenseOre", 3], ["PhosphateRock", 2]],
 };
 export const FOOT = 2;   // footprint half size (5x5)
+const BOMBABLE = new Set(CATEGORY_CELLS.Bombable);
 const NATURAL = new Set(CATEGORY_CELLS.Bombable.filter(c => c !== "Road"));   // natural rock
 const OPEN = new Set(["Back", "Empty"]);
 const onFootOf = (o, x, y) => Math.abs(x - o.x) <= FOOT && Math.abs(y - o.y) <= FOOT;
@@ -374,14 +376,14 @@ export function createSim({ programs, main, world, dir = 0, items = { RoadSector
     for (const [dx, dy] of digOrder(b.dir)) { const r = digAt(b.x + dx, b.y + dy); if (r !== 2) return r; }
     return 2;
   }
+  const notSimulated = new Set();   // USE items already reported as not simulated
   const ITEM_FX = {
     RoadSector(x, y) { const c = cellAt(w, x, y); if (!inside(x, y) || (seis && seis.onFoot(x, y)) || !isWalkable(c) || c === "Road" || c === "FedRoad") return false; setCell(x, y, "Road"); return true; },
     Block(x, y) { if (!inside(x, y) || !isWalkable(cellAt(w, x, y)) || botCovers(x, y) || (seis && seis.onFoot(x, y))) return false; setCell(x, y, "BlockSimple"); return true; },
     MiningCharge(x, y) {
-      const bombable = new Set(CATEGORY_CELLS.Bombable);
       for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
         const X = x + dx, Y = y + dy;
-        if (inside(X, Y) && bombable.has(cellAt(w, X, Y))) { setCell(X, Y, "Back"); S.cargo++; }
+        if (inside(X, Y) && BOMBABLE.has(cellAt(w, X, Y))) { setCell(X, Y, "Back"); S.cargo++; }
       }
       return true;
     },
@@ -415,6 +417,9 @@ export function createSim({ programs, main, world, dir = 0, items = { RoadSector
       if (name === "aim_x") a.right = Math.round(v.v); else a.front = Math.round(v.v);
       return true;
     }
+    // Writing aim_right / aim_front while the aim is absolute first resets it to relative (0, 0), so the other
+    // component is lost: an absolute offset has no exact relative form on a diagonal facing. The compiler always emits
+    // AIM REL before these writes, so only hand-built graphs see the reset. (Not verified in the game.)
     if (name === "aim_right" || name === "aim_front") {
       if (!a.rel) { a.rel = true; a.right = 0; a.front = 0; }
       if (name === "aim_right") a.right = Math.round(v.v); else a.front = Math.round(v.v);
@@ -454,7 +459,8 @@ export function createSim({ programs, main, world, dir = 0, items = { RoadSector
       case "scan": { const [x, y] = aimWorld(), c = cellAt(w, x, y); S.scanFront = c; return (CATEGORY_CELLS[p.category] || []).includes(c) ? 0 : 1; }
       case "use": {
         const it = p.item;
-        if (!(it in ITEM_FX)) { log(`USE ${it}: not simulated`); return 2; }
+        // items the sandbox has no model for: the bot has none of them (logged once per item)
+        if (!(it in ITEM_FX)) { if (!notSimulated.has(it)) { notSimulated.add(it); log(`USE ${it}: not simulated`); } return 2; }
         if (!(S.items[it] > 0)) return 2;
         const [x, y] = aimWorld();
         if (!ITEM_FX[it](x, y)) return 1;
@@ -550,7 +556,7 @@ export function createSim({ programs, main, world, dir = 0, items = { RoadSector
     w.initiators = world.initiators.map(o => ({ x: o.x, y: o.y }));
     const list = w.initiators.map(o => {
       const [cx, cy] = breakCentre(o, cfg);
-      const it = { x: o.x, y: o.y, cx, cy, state: "idle", left: 0, open: 0, rock: 0, refilled: 0, plan: null, k: 0, elapsed: 0 };
+      const it = { x: o.x, y: o.y, cx, cy, state: "idle", left: 0, open: 0, rock: 0, refilled: 0, plan: null, k: 0, elapsed: 0, skipped: [] };
       Object.defineProperty(it, "share", { enumerable: true, get() { return it.open + it.rock ? it.open / (it.open + it.rock) : 0; } });
       discCells(w, o, cfg, (x, y) => { const k = shareClass(w.cells[y * w.W + x], cfg); if (k === 1) it.open++; else if (k === 2) it.rock++; });
       return it;
@@ -587,16 +593,19 @@ export function createSim({ programs, main, world, dir = 0, items = { RoadSector
       if (onFoot(S.bot.x, S.bot.y)) return;     // standing on the initiator is safe
       die(o);
     }
+    // refill the planned cells from the current position down to distance `upTo`. Cells under a living bot are
+    // skipped and kept in `o.skipped`; they refill when the break settles if the bot has died by then.
+    function refillCell(o, x, y) {
+      if (!OPEN.has(w.cells[y * w.W + x])) return;
+      if (!S.dead && botCovers(x, y)) { o.skipped.push({ x, y }); return; }
+      setCell(x, y, regrowRock(x, y));
+      o.refilled++;
+    }
     function refill(o, upTo) {
-      while (o.k < o.plan.length && o.plan[o.k].d >= upTo) {
-        const { x, y } = o.plan[o.k++];
-        if (!OPEN.has(w.cells[y * w.W + x]) || (!S.dead && botCovers(x, y))) continue;
-        setCell(x, y, regrowRock(x, y));
-        o.refilled++;
-      }
+      while (o.k < o.plan.length && o.plan[o.k].d >= upTo) { const { x, y } = o.plan[o.k++]; refillCell(o, x, y); }
     }
     function startBreak(o, manual) {
-      o.state = "breaking"; o.left = breakNodes; o.elapsed = 0; o.refilled = 0; o.k = 0;
+      o.state = "breaking"; o.left = breakNodes; o.elapsed = 0; o.refilled = 0; o.k = 0; o.skipped = [];
       // the cells that will refill, from the rim inwards
       const plan = [], edge = R - cfg.fade;
       discCells(w, o, cfg, (x, y, d2) => {
@@ -613,7 +622,8 @@ export function createSim({ programs, main, world, dir = 0, items = { RoadSector
     }
     function settleOne(o) {
       refill(o, -1);
-      o.state = "idle"; o.left = 0; o.plan = null;
+      if (S.dead) { const sk = o.skipped; o.skipped = []; for (const { x, y } of sk) refillCell(o, x, y); }
+      o.state = "idle"; o.left = 0; o.plan = null; o.skipped = [];
       log(`Seismic break at (${o.cx}, ${o.cy}) over: ${o.refilled} cells refilled`);
     }
     seis = {

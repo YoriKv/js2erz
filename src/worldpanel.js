@@ -11,14 +11,46 @@ const MAX_NPS = 2000;
 const INIT_COLOR = "#3c6e80";
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
+const isInt = v => Number.isInteger(v);
+const BRUSH_NAMES = new Set([...BRUSHES.map(b => b.cell), "bot", "initiator"]);
+// a stored world, checked: null when it can't be used (a fresh world is generated then)
+export function loadWorld(w) {
+  if (!w || typeof w !== "object" || !isInt(w.W) || !isInt(w.H) || w.W < 5 || w.H < 5) return null;
+  if (!Array.isArray(w.cells) || w.cells.length !== w.W * w.H) return null;
+  const b = w.bot;
+  if (!b || !isInt(b.x) || !isInt(b.y) || b.x < 1 || b.y < 1 || b.x > w.W - 2 || b.y > w.H - 2) return null;
+  // cell indices (index 0 "Unknown" and unknown indices load as Back); names from older saves stay
+  const cells = w.cells.map(i => typeof i === "number" ? (i > 0 && CELLS[i]) || "Back" : typeof i === "string" ? i : "Back");
+  const out = { W: w.W, H: w.H, seed: isInt(w.seed) ? w.seed : null, cells, bot: { x: b.x, y: b.y } };
+  // initiators: integer centres whose footprint lies inside the border, no two overlapping
+  const inits = [];
+  for (const o of Array.isArray(w.initiators) ? w.initiators : []) {
+    if (!o || !isInt(o.x) || !isInt(o.y)) continue;
+    if (o.x - FOOT < 1 || o.y - FOOT < 1 || o.x + FOOT > w.W - 2 || o.y + FOOT > w.H - 2) continue;
+    if (inits.some(q => Math.abs(q.x - o.x) <= 2 * FOOT && Math.abs(q.y - o.y) <= 2 * FOOT)) continue;
+    inits.push({ x: o.x, y: o.y });
+  }
+  if (inits.length) out.initiators = inits;
+  return out;
+}
+// stored settings, coerced to sane values (missing or bad ones take the defaults)
+export function loadSettings(s, defaults) {
+  const out = JSON.parse(JSON.stringify(defaults));
+  if (!s || typeof s !== "object") return out;
+  const num = (v, lo, hi, d) => (typeof v === "number" && isFinite(v) ? Math.min(hi, Math.max(lo, Math.floor(v))) : d);
+  out.dir = num(s.dir, 0, 7, out.dir);
+  out.speed = num(s.speed, 0, 100, out.speed);
+  out.brush = BRUSH_NAMES.has(s.brush) ? s.brush : "Regolith";
+  if (s.items && typeof s.items === "object") for (const it of SIM_ITEMS) out.items[it] = num(s.items[it], 0, 1e6, out.items[it]);
+  if (s.seismic && typeof s.seismic === "object") out.seismic.nps = num(s.seismic.nps, 1, 1e7, out.seismic.nps);
+  return out;
+}
 function load() {
   try {
     const raw = localStorage.getItem(LS_KEY);
     if (!raw) return null;
     const o = JSON.parse(raw);
-    if (o.world && Array.isArray(o.world.cells)) o.world.cells = o.world.cells.map(i => typeof i === "number" ? CELLS[i] || "Back" : i);
-    if (o.world && !Array.isArray(o.world.initiators)) delete o.world.initiators;
-    return o;
+    return o && typeof o === "object" ? { world: loadWorld(o.world), settings: o.settings } : null;
   } catch (e) { return null; }
 }
 function save(state) {
@@ -80,7 +112,12 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
       <span class="wp-help" tabindex="0" data-ka="sim.help">?<span class="wp-helpbox" role="tooltip"></span></span>
     </div>
     <div class="wp-brushes" role="toolbar" data-ka="sim.brushes"></div>
-    <div class="wp-cvbox"><canvas class="wp-cv"></canvas><div class="wp-note" aria-live="polite" hidden></div></div>
+    <div class="wp-cvbox"><canvas class="wp-cv"></canvas><div class="wp-note" aria-live="polite" hidden></div>
+      <div class="wp-hud">
+        <button type="button" class="wp-undo" data-kt="hud.undo" data-ka="hud.undo" disabled>↶</button>
+        <button type="button" class="wp-redo" data-kt="hud.redo" data-ka="hud.redo" disabled>↷</button>
+      </div>
+    </div>
     <div class="wp-row">
       <select class="wp-size" data-ka="sim.size">${SIZES.map(([w, h]) => `<option value="${w}x${h}">${w}×${h}</option>`).join("")}</select>
       <label class="wp-l"><span data-k="sim.seed"></span> <input class="wp-seed" type="number" style="width:84px"></label>
@@ -88,8 +125,6 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
       <button type="button" class="wp-rand" data-k="sim.rand"></button>
       <button type="button" class="wp-clear" data-k="sim.clear" data-kt="sim.clearTip"></button>
       <button type="button" class="wp-fit" data-k="sim.fit"></button>
-      <button type="button" class="wp-undo" data-kt="hud.undo" data-ka="hud.undo" disabled>↶</button>
-      <button type="button" class="wp-redo" data-kt="hud.redo" data-ka="hud.redo" disabled>↷</button>
     </div>
     <div class="wp-row wp-seis" hidden>
       <button type="button" class="wp-trig" data-k="seis.trigger" data-kt="seis.triggerTip"></button>
@@ -111,14 +146,12 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
   const cv = $(".wp-cv"), ctx = cv.getContext("2d"), box = $(".wp-cvbox"), info = $(".wp-info");
 
   const stored = load();
+  // stale keys of older versions (scenario, seismic.drills) are dropped by loadSettings
   const state = {
-    world: stored?.world && stored.world.cells?.length === stored.world.W * stored.world.H ? stored.world : makeWorld(96, 72),
-    settings: Object.assign({ dir: 0, speed: 40, brush: "Regolith", items: { RoadSector: 20, Block: 20, MiningCharge: 5 },
-      seismic: { nps: SEISMIC_DEFAULTS.nodesPerSec } }, stored?.settings || {}),
+    world: stored?.world || makeWorld(96, 72),
+    settings: loadSettings(stored?.settings, { dir: 0, speed: 40, brush: "Regolith", items: { RoadSector: 20, Block: 20, MiningCharge: 5 },
+      seismic: { nps: SEISMIC_DEFAULTS.nodesPerSec } }),
   };
-  delete state.settings.scenario;   // the scenario select is gone
-  if (!state.settings.seismic || typeof state.settings.seismic !== "object") state.settings.seismic = { nps: SEISMIC_DEFAULTS.nodesPerSec };
-  delete state.settings.seismic.drills;
   // seismic initiators run with SEISMIC_DEFAULTS and the chosen node rate (drills are not modelled)
   const seisCfg = () => ({ ...SEISMIC_DEFAULTS, nodesPerSec: Math.max(1, +state.settings.seismic.nps || SEISMIC_DEFAULTS.nodesPerSec) });
   let sim = null, paused = true, raf = 0, last = 0, acc = 0;
@@ -178,6 +211,7 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
     const cur = state.world, next = hist[from].pop();
     hist[to].push(cloneWorld(cur));
     state.world = next; seedIn.value = next.seed ?? "";
+    sizeSel.value = `${next.W}x${next.H}`;
     save(state);
     if (next.W !== cur.W || next.H !== cur.H) fit();
     update(); updHist();
@@ -195,10 +229,11 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
   // the keys act on the drawing when the last click was in this panel (the graph has its own undo)
   let panelFocus = false;
   document.addEventListener("pointerdown", e => { panelFocus = root.contains(e.target); }, true);
+  document.addEventListener("focusin", e => { panelFocus = root.contains(e.target); }, true);
   window.addEventListener("keydown", e => {
     if (!panelFocus || !root.offsetParent || !(e.ctrlKey || e.metaKey) || e.altKey) return;
     const a = document.activeElement;
-    if (a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" || a.tagName === "SELECT")) return;
+    if (a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" || a.tagName === "SELECT" || a.isContentEditable)) return;
     const k = e.key.toLowerCase();
     if (k === "z" && !e.shiftKey) undo();
     else if (k === "y" || (k === "z" && e.shiftKey)) redo();
@@ -284,8 +319,11 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
     const r = box.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
     if (!r.width || !r.height) return;
     if (!fitted) { fitted = true; fit(); return; }
-    cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.height * dpr);
-    cv.style.width = r.width + "px"; cv.style.height = r.height + "px";
+    const cw = Math.round(r.width * dpr), ch = Math.round(r.height * dpr);
+    if (cv.width !== cw || cv.height !== ch) {           // resizing the canvas reallocates and clears it
+      cv.width = cw; cv.height = ch;
+      cv.style.width = r.width + "px"; cv.style.height = r.height + "px";
+    }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = "#15110e"; ctx.fillRect(0, 0, r.width, r.height);
     const w = sim ? sim.world : state.world, cs = view.cs;
@@ -378,9 +416,9 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
     const cur = sim.current(), { programs } = getPrograms();
     const node = cur && programs.get(cur.program)?.nodes.find(n => n.id === cur.node);
     const top = sim.frames[sim.frames.length - 1];
-    const vars = top ? [...top.vars] : [];
+    const vars = top ? [...top.vars] : sim.vars ? [...sim.vars] : [];   // after a normal finish: the main frame's
     const status = sim.status === "run" ? (paused ? t("sim.paused") : t("sim.running")) : sim.dead ? t("sim.dead") : t("sim.finished", resultWord(sim.result));
-    const bi = [["x", sim.bot.x], ["y", sim.bot.y], ["dir", sim.bot.dir], ["aim", `${sim.aim.rel ? t("rel") : t("abs")} ${sim.aim.front},${sim.aim.right}`]];
+    const bi = [["x", sim.bot.x], ["y", sim.bot.y], ["dir", sim.bot.dir], ["aim", sim.aim.rel ? `${t("rel")} ${sim.aim.front},${sim.aim.right}` : `${t("abs")} ${sim.aim.right},${sim.aim.front}`]];
     info.innerHTML = `
       <div><b class="wp-st ${sim.status === "run" ? "" : sim.result === "fail" ? "bad" : "ok"}">${esc(status)}</b>
         <span class="wp-m">· ${esc(t("sim.stats", sim.steps, sim.actions, sim.cargo))}</span></div>
@@ -463,7 +501,10 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
       else if (!stampInitiator(w, x, y)) { showNote(t("sim.initBad")); return; }
       showNote("");
     } else if (state.settings.brush === "bot") {
-      const bx = Math.min(w.W - 2, Math.max(1, x)), by = Math.min(w.H - 2, Math.max(1, y));
+      // the body stays off the border; a drag moves the bot without carving a trail: the cells go back to how they
+      // were before the stroke, and only the body at the final spot is cleared
+      const bx = Math.min(w.W - 3, Math.max(2, x)), by = Math.min(w.H - 3, Math.max(2, y));
+      if (drag.before && drag.before.cells.length === w.cells.length) w.cells = drag.before.cells.slice();
       w.bot = { x: bx, y: by };
       for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) w.cells[(by + dy) * w.W + bx + dx] = "Back";
     } else if (!setCell(w, x, y, state.settings.brush)) return;

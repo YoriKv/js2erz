@@ -1,8 +1,10 @@
 // UI language: string tables (en / ru / uk), t(), the current language and change listeners.
 //
-// Game terms (node titles, cell / item / category names, editor field names, node and output descriptions,
-// system variable descriptions) use the game client's own English and Russian text where it has one; see
-// CLIENT_EN and CLIENT_RU. The client has no Ukrainian, so every Ukrainian string is ours.
+// Game terms use the game client's own text where it has one; see CLIENT_EN and CLIENT_RU. In English that is the
+// cell names, category descriptions, editor field names, node and output descriptions and system variable
+// descriptions; English node titles, category, item and target names are the labels of nodes.js and the enum names.
+// In Russian the client also supplies node titles and category, item and target names. The client has no
+// Ukrainian, so every Ukrainian string is ours.
 // Output names ("success", "can't dig", …), the END marker and C.<cell> constants stay English in every language,
 // as they do in the Russian client.
 
@@ -53,8 +55,6 @@ const EN = {
   "help.wire": "Drag from an output circle onto a node to connect it, onto empty space to disconnect.",
   "help.keys": "Del: delete. Ctrl+C / Ctrl+V: copy / paste. Ctrl+Z / Ctrl+Y: undo / redo. F: fit.",
   "ins.line": "line {0}", "ins.lines": "lines {0}–{1}",
-
-
   "ins.outputs": "Outputs",
 
   "ref.call": "Call", "ref.node": "Node", "ref.how": "How it works",
@@ -70,7 +70,7 @@ const EN = {
   "imp.note": "The program opens in its own tab. It is not linked to the code; it is there to view, tidy, simulate and export.",
   "imp.ph": "— an erzstat.site export, or any JSON that contains one", "imp.name": "name (optional)",
   "imp.relayout": "lay out again", "imp.go": "Import",
-  "ex.basic": "Basic", "ex.road": "Follow a road", "ex.line": "Line of length len",
+  "ex.basic": "Basic", "ex.road": "Follow a road", "ex.line": "Line of length LEN",
   "ex.spiral": "45° spiral", "ex.ore": "Selective ore miner", "ex.sub": "Subprograms (CALL / EXIT)", "ex.wall": "Wall follower",
   "exp.sub": "{0} · needs {1} · js2erz",
   // directions, aim, inventory
@@ -151,7 +151,6 @@ const CLIENT_EN = {
   "odesc.assign.fail": "Bad name, bad value, read-only variable, or a non-number value for an aim variable.",
   "odesc.oper.fail": "Bad name, empty or non-number operand, non-number result (e.g. 0 / 0), or read-only variable.",
   "odesc.cmp.fail": "Values uncomparable.",
-  "out.notConnected": "Output not connected, the program will stop here.",
   "var.rnd": "Random number from 0 to 1", "var.x": "Bot's X coordinate", "var.y": "Bot's Y coordinate",
   "var.dir": "Bot's direction: 0 east, 2 south, 4 west, 6 north", "var.hp": "Bot's HP", "var.energy": "Bot's energy",
   "var.cargo": "Weight of the bot's cargo", "var.hp_max": "Bot's maximum HP", "var.energy_max": "Bot's maximum energy",
@@ -220,7 +219,6 @@ const CLIENT_RU = {
   "exit.success": "УСПЕХ", "exit.fail": "ПРОВАЛ",
   "sim.step": "ШАГ", "sim.run": "ВЫПОЛНИТЬ", "sim.stop": "Стоп",
   "tech.movedig": "настройка «Показывать ноду \"Ходкопа\"»", "tech.Subroutines": "Подпрограммы", "tech.Variables": "Переменные",
-  "brand.sub": "JavaScript → Программатор",
   "ndesc.start": "Точка входа программы", "ndesc.rotA": "Поворачивает бота", "ndesc.rotR": "Поворачивает бота",
   "ndesc.move": "Передвигает бота на одну клетку вперёд", "ndesc.dig": "Копает клетку перед ботом",
   "ndesc.movedig": "Передвигается или копает, если путь заблокирован",
@@ -244,7 +242,6 @@ const CLIENT_RU = {
   "odesc.assign.fail": "Плохое имя, плохое значение, переменная только для чтения или нечисловое значение для переменной прицела.",
   "odesc.oper.fail": "Плохое имя, пустой или нечисловой операнд, нечисловой результат (например, 0 / 0) или переменная только для чтения.",
   "odesc.cmp.fail": "Значения несравнимы.",
-  "out.notConnected": "Выход не подключён, программа остановится здесь.",
   "var.rnd": "Случайное число от 0 до 1", "var.x": "Координата X бота", "var.y": "Координата Y бота",
   "var.dir": "Направление бота: 0 восток, 2 юг, 4 запад, 6 север", "var.hp": "ХП бота", "var.energy": "Энергия бота",
   "var.cargo": "Вес груза бота", "var.hp_max": "Максимум ХП бота", "var.energy_max": "Максимум энергии бота",
@@ -275,13 +272,13 @@ const CLIENT_RU = {
   "cell.BlockMilitary3": "раскалённый военный блок", "cell.BlockEnergy0": "энергоблок",
   "cell.BlockEnergy1": "полуразряженный энергоблок", "cell.BlockEnergy2": "подсевший энергоблок", "cell.TechHole": "техническая дыра",
   "cell.BlackHole": "чёрная дыра", "cell.BackWorn": "протёртый фон", "cell.Protofluid": "протофлюид",
-
 };
 // Russian text written for js2erz
 const OWN_RU = {
   "doc.title": "js2erz — JavaScript в ноды Программатора ERZ",
   "doc.desc": "Напишите программу на JavaScript и получите граф нод Программатора ERZ, чтобы собрать его в игре.",
   "lang.label": "Язык",
+  "brand.sub": "JavaScript → Программатор",
   "top.examples": "Новая…", "top.examplesAria": "Новая программа из шаблона",
   "tpl.blank": "Пустая программа", "file.aria": "Сохранённые программы", "file.tip": "Ваши программы, сохранённые в этом браузере. Изменённый шаблон сохраняется как новая программа.", "file.template": "{0} (шаблон)",
   "file.rename": "Переименовать", "file.renameTip": "Переименовать эту программу", "file.renamePrompt": "Новое имя:",
@@ -319,8 +316,6 @@ const OWN_RU = {
   "help.wire": "Перетащите от кружка выхода на ноду, чтобы соединить, или на пустое место, чтобы отсоединить.",
   "help.keys": "Del: удалить. Ctrl+C / Ctrl+V: копировать / вставить. Ctrl+Z / Ctrl+Y: отменить / повторить. F: показать всё.",
   "ins.line": "строка {0}", "ins.lines": "строки {0}–{1}",
-
-
   "ins.outputs": "Выходы",
 
   "ref.call": "Вызов", "ref.node": "Нода", "ref.how": "Как это работает",
@@ -336,7 +331,7 @@ const OWN_RU = {
   "imp.note": "Программа откроется в отдельной вкладке. Она не связана с кодом: её можно смотреть, упорядочивать, запускать в симуляторе и экспортировать.",
   "imp.ph": "— экспорт с erzstat.site или любой JSON, в котором он есть", "imp.name": "имя (необязательно)",
   "imp.relayout": "разложить заново", "imp.go": "Импортировать",
-  "ex.basic": "Основы", "ex.road": "Ехать по дороге", "ex.line": "Линия длины len",
+  "ex.basic": "Основы", "ex.road": "Ехать по дороге", "ex.line": "Линия длины LEN",
   "ex.spiral": "Спираль 45°", "ex.ore": "Выборочная добыча руды", "ex.sub": "Подпрограммы (ВЫЗОВ / ВЫХОД)", "ex.wall": "Вдоль стены",
   "exp.sub": "{0} · требуется: {1} · js2erz",
   "dir.1": "юго-восток", "dir.3": "юго-запад", "dir.5": "северо-запад", "dir.7": "северо-восток",
@@ -435,8 +430,6 @@ const UK = {
   "help.wire": "Перетягніть від кружка виходу на вузол, щоб з'єднати, або на порожнє місце, щоб від'єднати.",
   "help.keys": "Del: видалити. Ctrl+C / Ctrl+V: копіювати / вставити. Ctrl+Z / Ctrl+Y: скасувати / повторити. F: показати все.",
   "ins.line": "рядок {0}", "ins.lines": "рядки {0}–{1}",
-
-
   "ins.outputs": "Виходи",
   "f.value": "Значення", "f.cell": "Клітинка", "f.category": "Категорія", "f.item": "Предмет", "f.target": "Ціль",
   "f.direction": "Напрямок", "f.exitVia": "Вихід через", "f.anyOf": "Будь-яке з",
@@ -454,7 +447,7 @@ const UK = {
   "imp.note": "Програма відкриється в окремій вкладці. Вона не пов'язана з кодом: її можна переглядати, впорядковувати, запускати в симуляторі й експортувати.",
   "imp.ph": "— експорт з erzstat.site або будь-який JSON, що його містить", "imp.name": "назва (необов'язково)",
   "imp.relayout": "розкласти заново", "imp.go": "Імпортувати",
-  "ex.basic": "Основи", "ex.road": "Їхати дорогою", "ex.line": "Лінія довжини len",
+  "ex.basic": "Основи", "ex.road": "Їхати дорогою", "ex.line": "Лінія довжини LEN",
   "ex.spiral": "Спіраль 45°", "ex.ore": "Вибірковий видобуток руди", "ex.sub": "Підпрограми (ВИКЛИК / ВИХІД)", "ex.wall": "Уздовж стіни",
   "exp.sub": "{0} · потрібно: {1} · js2erz",
   "node.start": "СТАРТ", "node.rotA": "ОБЕРТ АБС", "node.rotR": "ОБЕРТ ВІДН", "node.move": "КРОК", "node.dig": "КОПА",
@@ -514,7 +507,6 @@ const UK = {
   "odesc.assign.fail": "Погане ім'я, погане значення, змінна лише для читання або нечислове значення для змінної прицілу.",
   "odesc.oper.fail": "Погане ім'я, порожній або нечисловий операнд, нечисловий результат (наприклад, 0 / 0) або змінна лише для читання.",
   "odesc.cmp.fail": "Значення неможливо порівняти.",
-  "out.notConnected": "Вихід не під'єднано, програма зупиниться тут.",
   "var.rnd": "Випадкове число від 0 до 1", "var.x": "Координата X бота", "var.y": "Координата Y бота",
   "var.dir": "Напрямок бота: 0 схід, 2 південь, 4 захід, 6 північ", "var.hp": "HP бота", "var.energy": "Енергія бота",
   "var.cargo": "Вага вантажу бота", "var.hp_max": "Максимум HP бота", "var.energy_max": "Максимум енергії бота",
@@ -610,18 +602,14 @@ const DOCS = {
 };
 
 const TABLES = { en: { ...EN, ...CLIENT_EN }, ru: { ...OWN_RU, ...CLIENT_RU }, uk: UK };
-// counts for the docs: strings taken from the client vs written for js2erz
-export const SOURCE_STATS = {
-  clientEn: Object.keys(CLIENT_EN).length, clientRu: Object.keys(CLIENT_RU).length,
-  ownRu: Object.keys(OWN_RU).length + Object.keys(DOCS.ru).length, ownUk: Object.keys(UK).length + Object.keys(DOCS.uk).length,
-};
 
 // ---------------------------------------------------------------- state
 const supported = l => LANGS.some(([k]) => k === l);
 function initialLang() {
   try { const s = localStorage.getItem(LS_KEY); if (supported(s)) return s; } catch (e) { /* storage unavailable */ }
   const nav = (typeof navigator !== "undefined" && (navigator.languages || [navigator.language])) || [];
-  for (const n of nav) { const k = String(n || "").toLowerCase().slice(0, 2); if (k === "ru" || k === "uk") return k; }
+  // the first listed language we have wins (["en-US", "ru"] stays English)
+  for (const n of nav) { const k = String(n || "").toLowerCase().split("-")[0]; if (supported(k)) return k; }
   return "en";
 }
 let lang = initialLang();
