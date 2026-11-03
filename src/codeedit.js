@@ -33,30 +33,86 @@ export function highlight(src) {
 
 export function createEditor(root, { value = "", onChange = () => {}, onCursor = () => {} } = {}) {
   root.classList.add("ce");
-  root.innerHTML = `<div class="ce-gutter" aria-hidden="true"></div><div class="ce-scroll"><div class="ce-lines" aria-hidden="true"></div><pre class="ce-hl" aria-hidden="true"></pre><textarea class="ce-ta" spellcheck="false" autocapitalize="off" autocomplete="off" aria-label="JavaScript source"></textarea></div>`;
+  root.innerHTML = `<div class="ce-gutter" aria-hidden="true"></div><div class="ce-scroll"><div class="ce-lines" aria-hidden="true"></div><pre class="ce-hl" aria-hidden="true"></pre><div class="ce-sq" aria-hidden="true"></div><textarea class="ce-ta" spellcheck="false" autocapitalize="off" autocomplete="off" aria-label="JavaScript source"></textarea></div>`;
   const ta = root.querySelector(".ce-ta"), hl = root.querySelector(".ce-hl"), gutter = root.querySelector(".ce-gutter"),
-    scroll = root.querySelector(".ce-scroll"), linesBox = root.querySelector(".ce-lines");
+    scroll = root.querySelector(".ce-scroll"), linesBox = root.querySelector(".ce-lines"), sqBox = root.querySelector(".ce-sq");
   let marks = { err: new Set(), warn: new Set(), hl: new Set(), cur: null };
+  let diags = [];            // [{ sev: "err" | "warn", msg, loc: {line, col, endLine, endCol} }]
+  const tip = document.createElement("div"); tip.className = "ce-tip"; tip.hidden = true; document.body.append(tip);
   ta.value = value;
   const LH = () => parseFloat(getComputedStyle(ta).lineHeight) || 20;
   function paint() {
     hl.innerHTML = highlight(ta.value);
     const n = ta.value.split("\n").length;
     let g = "";
+    const byLine = new Map();
+    for (const d of diags) if (d.loc) { const l = byLine.get(d.loc.line) || []; l.push(d); byLine.set(d.loc.line, l); }
     for (let i = 1; i <= n; i++) {
-      const c = marks.err.has(i) ? " err" : marks.warn.has(i) ? " warn" : "";
-      g += `<div class="${c}${marks.hl.has(i) ? " hl" : ""}${marks.cur === i ? " cur" : ""}">${i}</div>`;
+      const ds = byLine.get(i) || [];
+      const c = marks.err.has(i) || ds.some(d => d.sev === "err") ? " err" : marks.warn.has(i) || ds.length ? " warn" : "";
+      const title = ds.length ? ` title="${esc(ds.map(d => d.msg).join("\n")).replace(/"/g, "&quot;")}"` : "";
+      g += `<div class="${c}${marks.hl.has(i) ? " hl" : ""}${marks.cur === i ? " cur" : ""}"${title}>${i}</div>`;
     }
     gutter.innerHTML = g;
     // full-width line backgrounds
     const lh = LH();
     let bg = "";
     const add = (set, cls) => { for (const i of set) bg += `<div class="${cls}" style="top:${(i - 1) * lh}px;height:${lh}px"></div>`; };
-    add(marks.hl, "hl"); add(marks.err, "err");
+    add(marks.hl, "hl"); add(new Set([...marks.err, ...diags.filter(d => d.sev === "err" && d.loc).map(d => d.loc.line)]), "err");
     if (marks.cur) add([marks.cur], "cur");
     linesBox.innerHTML = bg;
+    paintSquiggles(lh);
     syncSize();
   }
+  // monospace geometry: column -> x, with tabs expanded to the tab size
+  let cw = 0;
+  const charW = () => {
+    if (!cw) { const sp = document.createElement("span"); sp.textContent = "0".repeat(200); hl.append(sp); cw = sp.getBoundingClientRect().width / 200 || 7.8; sp.remove(); }
+    return cw;
+  };
+  const TAB = 2, PADX = 12, PADY = 8;
+  const visCol = (text, col) => { let v = 0; for (let i = 0; i < col && i < text.length; i++) v = text[i] === "\t" ? v + TAB - (v % TAB) : v + 1; return v + Math.max(0, col - text.length); };
+  function paintSquiggles(lh) {
+    const lines = ta.value.split("\n"), w = charW();
+    let out = "";
+    for (const d of diags) {
+      if (!d.loc) continue;
+      const { line, col } = d.loc, endLine = d.loc.endLine || line, endCol = d.loc.endCol || col + 1;
+      for (let l = line; l <= endLine && l <= lines.length; l++) {
+        const text = lines[l - 1] || "";
+        const a = l === line ? col - 1 : text.match(/^\s*/)[0].length, b = l === endLine ? endCol - 1 : text.length;
+        const x0 = visCol(text, a), x1 = Math.max(x0 + 1, visCol(text, b));
+        out += `<div class="${d.sev}" style="left:${PADX + x0 * w}px;top:${PADY + (l - 1) * lh + lh - 4}px;width:${(x1 - x0) * w}px"></div>`;
+      }
+    }
+    sqBox.innerHTML = out;
+  }
+  // hover: the messages of the diagnostics under the mouse
+  function diagsAt(e) {
+    const r = ta.getBoundingClientRect(), lh = LH(), w = charW();
+    const line = Math.floor((e.clientY - r.top - PADY) / lh) + 1, text = ta.value.split("\n")[line - 1];
+    if (text == null) return [];
+    const vx = (e.clientX - r.left - PADX) / w;
+    let col = 0; while (col < text.length && visCol(text, col + 1) <= vx) col++;
+    col += 1;                  // 1-based column under the mouse
+    return diags.filter(d => {
+      if (!d.loc) return false;
+      const { line: l0, col: c0 } = d.loc, l1 = d.loc.endLine || l0, c1 = Math.max(d.loc.endCol || c0 + 1, c0 + 1);
+      if (line < l0 || line > l1) return false;
+      return (line > l0 || col >= c0) && (line < l1 || col < c1);
+    });
+  }
+  ta.addEventListener("mousemove", e => {
+    const ds = diagsAt(e);
+    if (!ds.length) { tip.hidden = true; return; }
+    tip.replaceChildren(...ds.map(d => { const x = document.createElement("div"); x.className = d.sev; x.textContent = d.msg; return x; }));
+    tip.hidden = false;
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+    tip.style.left = Math.min(e.clientX + 12, innerWidth - tw - 8) + "px";
+    tip.style.top = (e.clientY + 18 + th > innerHeight ? e.clientY - th - 10 : e.clientY + 18) + "px";
+  });
+  ta.addEventListener("mouseleave", () => { tip.hidden = true; });
+  ta.addEventListener("keydown", () => { tip.hidden = true; });
   function syncSize() {
     hl.style.minHeight = ta.style.height = "0px";
     const h = Math.max(ta.scrollHeight, scroll.clientHeight);
@@ -106,6 +162,7 @@ export function createEditor(root, { value = "", onChange = () => {}, onCursor =
     get value() { return ta.value; },
     setValue(v) { ta.value = v; scroll.scrollTop = 0; paint(); },
     setMarks(m) { marks = { ...marks, ...m }; paint(); },
+    setDiagnostics(list) { diags = list || []; paint(); },
     reveal(line) {
       const lh = LH(), top = (line - 1) * lh;
       if (top < scroll.scrollTop || top > scroll.scrollTop + scroll.clientHeight - 2 * lh) scroll.scrollTop = Math.max(0, top - scroll.clientHeight / 3);

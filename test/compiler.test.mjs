@@ -301,3 +301,48 @@ test("sharing can be switched off", () => {
   const src = `let hits = 0, t1 = 0, t2 = 0, t3 = 0, a = 1; ${BIG} probe(a, a); probe(a, a); probe(a, a);`;
   assert.deepEqual(compile(src, { share: false }).shared, []);
 });
+
+// ---------------------------------------------------------------- lint
+test("lint reports every error, not just the first, with exact ranges", async () => {
+  const { lint } = await import("../src/compiler.js");
+  const { errors } = lint(`let a = b + 1;
+step(1);
+turn(30);
+scan(Category.Foo);
+hp = 3;
+if (dig() === "dugg") pass();
+aim(1);
+use(Cell.DenseOre);
+a = a + c;`);
+  const got = errors.map(e => `${e.loc.line}:${e.loc.col} ${e.msg}`);
+  assert.deepEqual(got, [
+    '1:9 "b" is not defined',
+    "2:6 step() takes no arguments",
+    "3:6 turn() takes multiples of 45 degrees",
+    "4:15 Category.Foo does not exist",
+    "5:1 hp is read-only",
+    '6:15 "dugg" is not an outcome of DIG ("success", "cantDig", "nothingToDig")',
+    "7:1 aim() needs 2 arguments",
+    "8:5 use() item: expected item, got cell",
+    '9:9 "c" is not defined',
+  ]);
+  assert.deepEqual(errors[0].loc, { line: 1, col: 9, endLine: 1, endCol: 10 });
+});
+
+test("lint: a failed declaration still declares its name; code the compiler skips is checked too", async () => {
+  const { lint } = await import("../src/compiler.js");
+  const r = lint(`let a = nope + 1;\nstep();\nlet z = a * 2;\nfunction never() { missing(); return q; }\nlet unused = 3;\nstep(z);`);
+  assert.deepEqual(r.errors.map(e => e.msg), ['"nope" is not defined', "unknown function missing()", '"q" is not defined', "step() takes no arguments"]);
+  assert.deepEqual(r.warnings.map(w => w.msg), ['"unused" is never used']);
+});
+
+test("lint: syntax errors, extra arguments to functions, clean examples", async () => {
+  const { lint } = await import("../src/compiler.js");
+  assert.deepEqual(lint("let x = ;").errors.map(e => e.msg), ["Unexpected token"]);
+  assert.deepEqual(lint("function f(p) { step(); }\nf(1, 2);").warnings.map(w => w.msg), ["f() takes 1 parameter; the rest are ignored"]);
+  for (const ex of EXAMPLES) assert.deepEqual(lint(ex.code), { errors: [], warnings: [] }, ex.id);
+});
+
+test("compile still stops at the first error", () => {
+  assert.throws(() => compile("step(1); turn(30);"), /^Error: step\(\) takes no arguments$/);
+});

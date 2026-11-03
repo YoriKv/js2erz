@@ -61,6 +61,17 @@ const ROT_NAMES = { turnLeft: -2, turnRight: 2, turnAround: 4 };
 const OUTCOME_FUNS = new Set(["step", "move", "dig", "moveDig", "scan", "use", "useItem", "inventory", "unload", "load", "autoCargo", "call"]);
 const ACTION_FUNS = new Set(["rotateTo", "turn", "turnLeft", "turnRight", "turnAround", "aim", "aimAt", "pass"]);
 const SPECIAL_FUNS = new Set(["exit", "fail", "halt", "anyOf", "inCategory", "log"]);
+// [min, max] arguments of the built-in calls (anyOf, inCategory, call and log check their own)
+const ARITY = { step: [0, 0], move: [0, 0], dig: [0, 0], moveDig: [0, 0], autoCargo: [0, 0], pass: [0, 0], halt: [0, 0], fail: [0, 0],
+  turnLeft: [0, 0], turnRight: [0, 0], turnAround: [0, 0], turn: [1, 1], rotateTo: [1, 1], aim: [2, 2], aimAt: [2, 2],
+  scan: [1, 1], use: [1, 1], useItem: [1, 1], unload: [0, 1], load: [0, 1], inventory: [1, 2], exit: [0, 1] };
+const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+function checkArity(name, e) {
+  const r = ARITY[name]; if (!r) return;
+  const n = e.arguments.length, [lo, hi] = r;
+  if (n > hi) fail(hi === 0 ? `${name}() takes no arguments` : lo === hi ? `${name}() takes ${plural(hi, "argument")}` : `${name}() takes at most ${plural(hi, "argument")}`, e.arguments[hi]);
+  if (n < lo) fail(lo === hi ? `${name}() needs ${plural(lo, "argument")}` : `${name}() needs at least ${plural(lo, "argument")}`, e);
+}
 // outputs that a statement or condition leaves unconnected (the program stops there): real errors only
 const ERROR_OUTS = { assign: [1], oper: [1], cmp: [3], call: [2] };
 const normKey = s => String(s).toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -166,10 +177,115 @@ export function compile(source, opts = {}) {
   return best;
 }
 
+// All diagnostics of a source: { errors: [{msg, loc}], warnings: [{msg, loc}] }. One pass, no function sharing.
+export function lint(source) {
+  let ast;
+  try { ast = acorn.parse(source, { ecmaVersion: "latest", sourceType: "script", locations: true, allowReturnOutsideFunction: true }); }
+  catch (e) {
+    const loc = e.loc ? { line: e.loc.line, col: e.loc.column + 1, endLine: e.loc.line, endCol: e.loc.column + 2 } : null;
+    return { errors: [{ msg: e.message.replace(/\s*\(\d+:\d+\)$/, ""), loc }], warnings: [] };
+  }
+  let errors = [], warnings = [];
+  try { warnings = new Compiler({ collect: true, share: new Set() }).run(ast).warnings; }
+  catch (e) {
+    if (e instanceof CompileError) { errors = e.all || [{ msg: e.message, loc: e.loc }]; warnings = e.warnings || []; }
+    else errors = [{ msg: "internal error: " + e.message, loc: null }];
+  }
+  // names in code the compiler never reaches (uncalled functions, dead branches) and unused variables
+  const names = checkNames(ast);
+  const key = d => `${d.msg}@${d.loc ? d.loc.line + ":" + d.loc.col : ""}`, seen = new Set(errors.concat(warnings).map(key));
+  for (const d of names.errors) if (!seen.has(key(d))) { seen.add(key(d)); errors.push(d); }
+  for (const d of names.warnings) if (!seen.has(key(d))) { seen.add(key(d)); warnings.push(d); }
+  const pos = d => d.loc ? d.loc.line * 1e5 + d.loc.col : 0;
+  return { errors: errors.sort((a, b) => pos(a) - pos(b)), warnings: warnings.sort((a, b) => pos(a) - pos(b)) };
+}
+
+// Scope walk over the whole AST: unknown names and variables that are never read.
+const GLOBAL_NAMES = new Set([...OUTCOME_FUNS, ...ACTION_FUNS, ...SPECIAL_FUNS, ...Object.keys(ENUMS), ...BUILTIN_VARS,
+  "Math", "console", "undefined", "NaN", "Infinity"]);
+function checkNames(ast) {
+  const errors = [], warnings = [], all = [];
+  const scopes = [];
+  const declare = (id, kind, node) => {
+    if (!id || id.type !== "Identifier") return;
+    const top = scopes[scopes.length - 1];
+    if (top.has(id.name)) return;
+    const b = { name: id.name, kind, node: node || id, reads: 0 };
+    top.set(id.name, b); all.push(b);
+  };
+  const lookup = name => { for (let i = scopes.length - 1; i >= 0; i--) { const b = scopes[i].get(name); if (b) return b; } return null; };
+  const isFn = n => n && (n.type === "FunctionDeclaration" || n.type === "FunctionExpression" || n.type === "ArrowFunctionExpression");
+  // var and function declarations belong to the function scope, let / const to the block
+  function hoistVars(n, fnScope) {
+    if (!n || typeof n !== "object") return;
+    if (Array.isArray(n)) { n.forEach(x => hoistVars(x, fnScope)); return; }
+    if (n.type === "VariableDeclaration" && n.kind === "var") n.declarations.forEach(d => declare(d.id, "var", d));
+    if (isFn(n)) return;
+    for (const k in n) if (k !== "loc" && n[k] && typeof n[k] === "object") hoistVars(n[k], fnScope);
+  }
+  function hoistBlock(stmts) {
+    for (const st of stmts) {
+      if (st.type === "FunctionDeclaration") declare(st.id, "fn", st);
+      else if (st.type === "VariableDeclaration" && st.kind !== "var") st.declarations.forEach(d => declare(d.id, st.kind, d));
+    }
+  }
+  function ref(id, read, call) {
+    if (GLOBAL_NAMES.has(id.name) && !lookup(id.name)) return;
+    const b = lookup(id.name);
+    if (b) { if (read) b.reads++; return; }
+    errors.push({ msg: call ? `unknown function ${id.name}()` : `"${id.name}" is not defined`, loc: locOf(id) });
+  }
+  function fn(n) {
+    scopes.push(new Map());
+    for (const p of n.params) {
+      if (p.type === "AssignmentPattern") { walk(p.right); declare(p.left, "param", p); } else declare(p, "param", p);
+    }
+    if (n.body.type === "BlockStatement") { hoistVars(n.body.body, true); hoistBlock(n.body.body); n.body.body.forEach(walk); }
+    else walk(n.body);
+    scopes.pop();
+  }
+  function walk(n) {
+    if (!n || typeof n !== "object") return;
+    if (Array.isArray(n)) { n.forEach(walk); return; }
+    switch (n.type) {
+      case "Identifier": ref(n, true); return;
+      case "FunctionDeclaration": fn(n); return;
+      case "FunctionExpression": case "ArrowFunctionExpression": fn(n); return;
+      case "BlockStatement": scopes.push(new Map()); hoistBlock(n.body); n.body.forEach(walk); scopes.pop(); return;
+      case "ForStatement": case "ForOfStatement": case "ForInStatement":
+        scopes.push(new Map());
+        for (const k of ["init", "left"]) if (n[k] && n[k].type === "VariableDeclaration" && n[k].kind !== "var") n[k].declarations.forEach(d => declare(d.id, n[k].kind, d));
+        if (n.type === "ForStatement") { walk(n.init); walk(n.test); walk(n.update); }
+        else { if (n.left.type === "VariableDeclaration") n.left.declarations.forEach(d => { if (d.id.type === "Identifier") lookup(d.id.name).reads++; }); else walk(n.left); walk(n.right); }
+        walk(n.body); scopes.pop(); return;
+      case "VariableDeclaration": n.declarations.forEach(d => walk(d.init)); return;
+      case "MemberExpression": walk(n.object); if (n.computed) walk(n.property); return;
+      case "Property": if (n.computed) walk(n.key); walk(n.value); return;
+      case "LabeledStatement": walk(n.body); return;
+      case "BreakStatement": case "ContinueStatement": return;
+      case "CallExpression":
+        if (n.callee.type === "Identifier") ref(n.callee, true, true); else walk(n.callee);
+        walk(n.arguments); return;
+      case "AssignmentExpression":
+        if (n.left.type === "Identifier") ref(n.left, n.operator !== "="); else walk(n.left);
+        walk(n.right); return;
+      case "UpdateExpression": if (n.argument.type === "Identifier") ref(n.argument, false); else walk(n.argument); return;
+    }
+    for (const k in n) if (k !== "loc" && k !== "type" && n[k] && typeof n[k] === "object") walk(n[k]);
+  }
+  scopes.push(new Map());
+  hoistVars(ast.body, true); hoistBlock(ast.body); ast.body.forEach(walk);
+  for (const b of all) if (b.reads === 0 && (b.kind === "let" || b.kind === "const" || b.kind === "var") && !b.name.startsWith("_"))
+    warnings.push({ msg: `"${b.name}" is never used`, loc: locOf(b.node.id || b.node) });
+  return { errors, warnings };
+}
+
 class Compiler {
   constructor(opts) {
     this.opts = opts;
     this.warnings = [];
+    this.collect = !!opts.collect;   // record errors per statement and go on (diagnostics), instead of stopping at the first
+    this.errors = [];
     this.programs = [];           // Builder[] in creation order, main first
     this.progFns = new Map();     // JS function name -> {node, name, params}
     this.tech = new Set();
@@ -192,11 +308,17 @@ class Compiler {
     this.queue = [];
     const main = this.newProgram(mainName, []);
     // hoist functions; "use program" functions become separate programs
-    for (const st of body) this.hoist(st, this.global);
-    this.compileProgram(main, body, this.global, null);
+    const guard = fn => { if (!this.collect) return fn(); try { fn(); } catch (e) { if (!(e instanceof CompileError)) { if (!this.errors.length) throw e; return; } this.record(e); } };
+    for (const st of body) guard(() => this.hoist(st, this.global));
+    guard(() => this.compileProgram(main, body, this.global, null));
     while (this.queue.length) {
       const job = this.queue.shift();
-      this.compileProgram(job.b, job.fn.body.body, new Scope(this.global, job), job);
+      guard(() => this.compileProgram(job.b, job.fn.body.body, new Scope(this.global, job), job));
+    }
+    if (this.errors.length) {
+      const first = this.errors[0], err = new CompileError(first.msg, null);
+      err.loc = first.loc; err.all = this.errors.map(({ msg, loc }) => ({ msg, loc })); err.warnings = this.warnings;
+      throw err;
     }
     const programs = this.programs.map(b => finish(b, this));
     for (const p of programs) {
@@ -399,7 +521,30 @@ class Compiler {
   block(stmts) { for (const s of stmts) this.stmt(s); }
   stmt(s) {
     const tempMark = this.b.temps;
-    try { this.stmtInner(s); } finally { this.b.temps = tempMark; }
+    if (!this.collect) { try { this.stmtInner(s); } finally { this.b.temps = tempMark; } return; }
+    // collecting diagnostics: a failed statement is recorded and skipped, the rest is still checked
+    const saved = { scope: this.scope, loops: this.loops, nLoops: this.loops.length, ctx: this.ctx, inlining: this.inlining,
+      nInlining: this.inlining.length, nFn: this.fnStack.length, sharedMode: this.sharedMode };
+    try { this.stmtInner(s); }
+    catch (e) { this.recover(e, saved, s); }
+    finally { this.b.temps = tempMark; }
+  }
+  recover(e, saved, s) {
+    if (!(e instanceof CompileError)) { if (!this.errors.length) throw e; return; }   // internal errors after a real one are noise
+    this.record(e);
+    let sc = this.scope; while (sc && sc !== saved.scope) sc = sc.parent;
+    if (sc) while (this.scope !== saved.scope) this.popScope(); else this.scope = saved.scope;
+    this.loops = saved.loops; this.loops.length = saved.nLoops;
+    this.inlining = saved.inlining; this.inlining.length = saved.nInlining;
+    this.fnStack.length = saved.nFn; this.ctx = saved.ctx; this.sharedMode = saved.sharedMode;
+    this.b.pending = [];
+    // names declared by a failed declaration still exist, so later uses don't report "not defined"
+    if (s && s.type === "VariableDeclaration") for (const d of s.declarations)
+      if (d.id.type === "Identifier" && !this.scope.map.has(d.id.name)) this.bindVar(this.scope, d.id.name, d, true);
+  }
+  record(e) {
+    const key = e.message + "@" + (e.loc ? `${e.loc.line}:${e.loc.col}` : "");
+    if (!this.errors.some(x => x.key === key)) this.errors.push({ key, msg: e.message, loc: e.loc });
   }
   stmtInner(s) {
     const b = this.b;
@@ -728,6 +873,7 @@ class Compiler {
     if (bind && bind.kind === "fn") { this.inline(bind, e, { kind: "stmt", exits: [] }); return; }
     if (bind && bind.kind === "prog") { const id = this.callProgram(bind.job.name, bind.job.params.length, e.arguments, e); b.pending = b.holes(id, [0, 1]); return; }
     if (name === "log" || (e.callee.type === "MemberExpression" && e.callee.object.name === "console")) { this.warn("log() has no node; ignored", e); return; }
+    if (!bind) checkArity(name, e);
     if (name === "halt" && !bind) { b.drop(); return; }
     if ((name === "exit" || name === "fail") && !bind) {
       let asFail = name === "fail";
@@ -753,6 +899,7 @@ class Compiler {
 
   // ------------------------------------------------------------ builtin nodes
   action(name, e) {
+    checkArity(name, e);
     const b = this.b, args = e.arguments;
     // f(c ? x : y) with constant x, y: branch on c, one fixed node per side
     const tern = args.findIndex(a => a.type === "ConditionalExpression" && !this.constEval(a));
@@ -822,6 +969,7 @@ class Compiler {
   }
 
   outcomeNode(name, e) {
+    checkArity(name, e);
     const b = this.b, args = e.arguments;
     const emit = (t, p) => { const id = b.emit(t, p, e); if (T[t].tech) this.tech.add(T[t].tech); return { id, t }; };
     switch (name) {
@@ -877,6 +1025,7 @@ class Compiler {
     const b = this.b;
     if (this.inlining.includes(bind)) fail(`${bind.name}() is recursive; inlined functions can't recurse (mark it "use program" to make it a CALL)`, e);
     const fn = bind.fn;
+    if (e.arguments.length > fn.params.length) this.warn(`${bind.name}() takes ${plural(fn.params.length, "parameter")}; the rest are ignored`, e.arguments[fn.params.length]);
     // functions are keyed by their source position plus the constant arguments, so constants stay specialised
     const { key, sig, shareable } = this.callKey(bind, e);
     let st = this.stats.get(key);

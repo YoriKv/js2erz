@@ -225,10 +225,10 @@ function nodeSvg(n, index, o) {
   if (!small) g += `<rect width="${w}" height="${HDR}" fill="${t.bg}"/>`;
   g += `<rect x="1" y="1" width="${w - 2}" height="${h - 2}" fill="none" stroke="${edgeCol}" stroke-width="2"/>`;
   if (!small) {
-    const room = w - 13 - (o.showIndex ? String(index).length * 6.6 + 6 : 0);
+    const room = w - 13 - (String(index).length * 6.6 + 6);
     g += fitText(7, HDR / 2 + 1, L.node(n.t), room, { size: 16, min: 11, fill: fg, anchor: "start" });
-    if (o.showIndex) g += text(w - 6, HDR / 2 + 1, String(index), { size: 11, fill: fg, anchor: "end", opacity: ".55" });
-  } else if (o.showIndex) g += text(w / 2, -8, String(index), { size: 11, fill: TITLE, opacity: ".6" });
+    g += text(w - 6, HDR / 2 + 1, String(index), { size: 11, fill: fg, anchor: "end", opacity: ".55" });
+  } else g += text(w / 2, -8, String(index), { size: 11, fill: TITLE, opacity: ".6" });
   g += nodeBody(n, w, h, L);
   if (n.t !== "start") {
     const iy = inPos(n)[1] - n.y * U, has = o.linked.has(n.id);
@@ -253,7 +253,7 @@ export function arrowDefs(prefix = "") {
     d += `<marker id="${prefix}ah-${k}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1,1L8,5L1,9" fill="none" stroke="${c}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></marker>`;
   return d;
 }
-// o: {routes, sel, selEdge, current, hl, activePort, showIndex, interactive, prefix, labels}
+// o: {routes, sel, selEdge, current, hl, activePort, interactive, prefix, labels}
 export function graphSvg(prog, o = {}) {
   const prefix = o.prefix || "";
   const byId = new Map(prog.nodes.map(n => [n.id, n]));
@@ -286,7 +286,7 @@ export function graphBounds(prog, routes) {
 }
 // standalone SVG document for export
 export function exportSvg(prog, o = {}) {
-  const { defs, body } = graphSvg(prog, { routes: o.routes, showIndex: o.showIndex !== false, prefix: "x", labels: o.labels });
+  const { defs, body } = graphSvg(prog, { routes: o.routes, prefix: "x", labels: o.labels });
   const b = graphBounds(prog, o.routes), pad = 60, head = o.title ? 56 : 0;
   // loops routed around the graph can leave the node box; leave room for them
   const W = Math.ceil(b.w + 2 * pad), H = Math.ceil(b.h + 2 * pad + head);

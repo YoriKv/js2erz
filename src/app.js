@@ -1,5 +1,5 @@
 // js2erz application: code editor -> compiler -> layout -> interactive node canvas, plus simulator and exports.
-import { compile, BUILTIN_DOCS } from "./compiler.js";
+import { compile, lint, BUILTIN_DOCS } from "./compiler.js";
 import { layout } from "./layout.js";
 import { graphSvg, graphBounds, exportSvg } from "./render.js";
 import { U, sizePx, portPos } from "./geom.js";
@@ -16,7 +16,7 @@ const $ = id => document.getElementById(id);
 const LS = "js2erz.v1";
 const store = (() => { try { return JSON.parse(localStorage.getItem(LS)) || {}; } catch (e) { return {}; } })();
 const save = () => { try { localStorage.setItem(LS, JSON.stringify(store)); } catch (e) { /* storage unavailable */ } };
-store.opts = Object.assign({ live: true, idx: true, codeW: null, sideW: null }, store.opts);
+store.opts = Object.assign({ live: true, codeW: null, sideW: null }, store.opts);
 
 // ---------------------------------------------------------------- state
 let compiled = [];        // [{prog, routes, edited, view, undo, redo}] from the code
@@ -102,23 +102,33 @@ function openCur(cur) {
 // ---------------------------------------------------------------- editor + compile
 const editor = createEditor($("editor"), {
   value: curCode(),
-  onChange: v => { onEdit(v); if (store.opts.live) scheduleCompile(); },
+  onChange: v => { onEdit(v); scheduleLint(); if (store.opts.live) scheduleCompile(); },
   onCursor: (line, endLine) => { highlightNodesForLines(line, endLine ?? line); },
 });
-let compileTimer = null;
+let compileTimer = null, lintTimer = null, lastLint = { errors: [], warnings: [] }, lintedSrc = null;
 function scheduleCompile() { clearTimeout(compileTimer); compileTimer = setTimeout(() => runCompile(false), 350); }
+function scheduleLint() { clearTimeout(lintTimer); lintTimer = setTimeout(runLint, 250); }
+// every problem in the code at once (src/compiler.js lint), shown as squiggles and in the list under the editor
+function runLint() {
+  clearTimeout(lintTimer);
+  const src = editor.value;
+  if (src === lintedSrc) return;
+  lintedSrc = src; lastLint = lint(src);
+  editor.setDiagnostics([...lastLint.errors.map(d => ({ ...d, sev: "err" })), ...lastLint.warnings.map(d => ({ ...d, sev: "warn" }))]);
+  renderDiag();
+}
 
 // structure signature: same graph shape keeps the hand-tidied positions
 const shape = p => p.name + "|" + p.nodes.map(n => n.t + JSON.stringify(n.p) + n.outs.join(",")).join(";");
 function runCompile(force) {
   if (!force && compiled.some(c => c.edited)) { showBanner(); return; }
   const src = editor.value;
+  runLint();
   let res;
   try { res = compile(src); }
   catch (e) {
     lastErr = e; lastRes = null;
-    renderDiag(null, e);
-    editor.setMarks({ err: new Set(e.loc ? [e.loc.line] : []) });
+    renderDiag();
     return;
   }
   lastErr = null; lastRes = res;
@@ -135,14 +145,14 @@ function runCompile(force) {
   const k = tabs().findIndex(t => t.prog.name === curName);
   cur = k >= 0 ? k : 0;
   sel.clear(); selEdge = null; activePort = null;
-  renderDiag(res, null);
-  editor.setMarks({ err: new Set(), warn: new Set(res.warnings.filter(w => w.loc).map(w => w.loc.line)) });
+  renderDiag();
   hideBanner();
   renderTabs(); if (view() && (view().fresh || !view().view)) fit(); else render();
   renderSide();
   world && world.refresh();
 }
-function renderDiag(res, err) {
+function renderDiag() {
+  const res = lastErr ? null : lastRes, err = lastErr;
   const d = $("diag");
   d.innerHTML = "";
   const line = (cls, text, loc) => {
@@ -151,13 +161,19 @@ function renderDiag(res, err) {
     if (loc) el.addEventListener("click", () => editor.select(loc.line, loc.col || 1));
     d.append(el);
   };
-  if (err) { line("err", `${err.loc ? `${err.loc.line}:${err.loc.col}  ` : ""}${err.message}`, err.loc); return; }
+  const at = loc => loc ? `${loc.line}:${loc.col}  ` : "";
+  const errs = lastLint.errors.slice();
+  // a compile error the lint pass didn't see (should not happen) still shows
+  if (err && !errs.some(x => x.msg === err.message)) errs.unshift({ msg: err.message, loc: err.loc });
+  for (const x of errs) line("err", at(x.loc) + x.msg, x.loc);
+  const warns = () => { for (const w of lastLint.warnings) line("warn", at(w.loc) + w.msg, w.loc); };
+  if (err || errs.length || !res) { warns(); return; }
   const total = res.programs.reduce((a, p) => a + p.nodes.length, 0);
   line("ok", res.programs.map(p => `${p.name}: ${t("n.nodes", p.nodes.length)}`).join(" · ") + (res.programs.length > 1 ? `  ${t("diag.total", total)}` : ""));
   if (res.shared && res.shared.length)
     line("m", t("diag.shared", res.shared.map(sh => `${sh.name}() ×${sh.calls}`).join(", "), t("n.nodes", res.sharedSaved)));
   if (res.tech.length) line("m", t("diag.needs", res.tech.map(techLabel).join(", ")));
-  for (const w of res.warnings) line("warn", `${w.loc ? `${w.loc.line}:${w.loc.col}  ` : ""}${w.msg}`, w.loc);
+  warns();
 }
 function showBanner() {
   const b = $("banner");
@@ -199,7 +215,7 @@ function render() {
   const p = v.prog;
   const hl = new Set();
   if (codeHl.size) p.nodes.forEach(n => { if (n.src && [...codeHl].some(l => l >= n.src.line && l <= n.src.endLine)) hl.add(n.id); });
-  const { defs, body } = graphSvg(p, { routes: v.routes, sel, selEdge, activePort, hl, showIndex: store.opts.idx, interactive: true, labels: drawLabels() });
+  const { defs, body } = graphSvg(p, { routes: v.routes, sel, selEdge, activePort, hl, interactive: true, labels: drawLabels() });
   const z = v.view || { x: 40, y: 40, z: 1 };
   svg.innerHTML = `<defs>${defs}<pattern id="gp" width="${U}" height="${U}" patternUnits="userSpaceOnUse"><path d="M${U} 0H0V${U}" fill="none" stroke="#33281f" stroke-width="1"/></pattern></defs>` +
     `<g id="vp" transform="translate(${z.x},${z.y}) scale(${z.z})"><rect x="-200000" y="-200000" width="400000" height="400000" fill="url(#gp)"/>${body}` +
@@ -564,7 +580,7 @@ const svgForExport = () => {
   const v = view(), p = v.prog;
   const tech = [...new Set(p.nodes.map(n => T[n.t].tech).filter(Boolean))];
   const nodes = t("n.nodes", p.nodes.length);
-  return exportSvg(p, { routes: v.routes, title: p.name, showIndex: store.opts.idx, labels: drawLabels(),
+  return exportSvg(p, { routes: v.routes, title: p.name, labels: drawLabels(),
     subtitle: tech.length ? t("exp.sub", nodes, tech.map(x => tOr("tech." + x, x)).join(", ")) : `${nodes} · js2erz` });
 };
 $("bSvg").addEventListener("click", () => { if (view()) download(`${prog().name}.svg`, new Blob([svgForExport()], { type: "image/svg+xml" })); });
@@ -666,8 +682,6 @@ $("bDelete").addEventListener("click", () => {
 $("bCompile").addEventListener("click", () => runCompile(true));
 $("optLive").checked = store.opts.live;
 $("optLive").addEventListener("change", e => { store.opts.live = e.target.checked; save(); if (e.target.checked) runCompile(false); });
-$("optIdx").checked = store.opts.idx;
-$("optIdx").addEventListener("change", e => { store.opts.idx = e.target.checked; save(); render(); });
 $("bLayout").addEventListener("click", () => { const v = view(); if (!v) return; snapshot(); v.routes = layout(v.prog); if (v.imported) persistImported(); fit(); });
 $("bFit").addEventListener("click", fit);
 $("bUndo").addEventListener("click", () => restore("undo", "redo"));
@@ -708,7 +722,7 @@ onLangChange(() => {
   $("langSel").value = getLang();
   closeModal();
   applyStatic(); renderExamples(); renderFiles(); renderTabs(); renderPalette(); renderGraphHelp();
-  if (lastErr) renderDiag(null, lastErr); else if (lastRes) renderDiag(lastRes, null);
+  renderDiag();
   if (!$("banner").hidden) showBanner();
   render(); renderSide();
 });
