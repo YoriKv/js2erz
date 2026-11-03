@@ -98,8 +98,6 @@ const EN = {
   "log.exit": "{0} {1}", "log.stopped": "stopped", "log.useNotSim": "{0} {1}: not simulated",
   "log.returned": "\"{0}\" returned {1}", "log.callNo": "{0} \"{1}\": no such program → halt",
   "log.callOver": "{0} \"{1}\": stack overflow → halt", "log.call": "{0} \"{1}\"", "log.unknown": "unknown node type {0}",
-  "brush.Back": "Dug out", "brush.Road": "Road", "brush.Regolith": "Regolith", "brush.Chondrite": "Chondrite",
-  "brush.TectonicMass": "Wall (undiggable)",
   "sim.init": "Initiator", "sim.initTip": "Seismic initiator (5×5): click to place one, click one to remove it",
   "sim.initBad": "No room for an initiator here: its 5×5 needs a 1-cell gap to other initiators and to the border.",
   "sim.dead": "bot destroyed",
@@ -278,9 +276,7 @@ const CLIENT_RU = {
   "cell.BlockMilitary3": "раскалённый военный блок", "cell.BlockEnergy0": "энергоблок",
   "cell.BlockEnergy1": "полуразряженный энергоблок", "cell.BlockEnergy2": "подсевший энергоблок", "cell.TechHole": "техническая дыра",
   "cell.BlackHole": "чёрная дыра", "cell.BackWorn": "протёртый фон", "cell.Protofluid": "протофлюид",
-  "brush.Back": "Задник", "brush.Road": "Дорога", "brush.Regolith": "Реголит", "brush.Chondrite": "Хондрит",
-  "brush.SulfideRock": "Сульфид", "brush.DenseOre": "Шеелит", "brush.WaterIce": "Гидратная жила",
-  "brush.SinterCrust": "Спёкшаяся корка", "brush.MetallicCrust": "Импактит", "brush.BlockSimple": "Ветхий блок",
+
 };
 // Russian text written for js2erz
 const OWN_RU = {
@@ -365,7 +361,6 @@ const OWN_RU = {
   "log.stopped": "остановлена", "log.useNotSim": "{0} {1}: не моделируется",
   "log.returned": "«{0}» вернула {1}", "log.callNo": "{0} «{1}»: нет такой программы → halt",
   "log.callOver": "{0} «{1}»: переполнение стека → halt", "log.call": "{0} «{1}»", "log.unknown": "неизвестный тип ноды {0}",
-  "brush.TectonicMass": "Стена (не копается)",
   "sim.init": "Инициатор", "sim.initTip": "Сейсмоинициатор (5×5): щелчок ставит, щелчок по нему убирает",
   "sim.initBad": "Здесь нет места для инициатора: его 5×5 требует зазора в 1 клетку от других инициаторов и от края.",
   "sim.dead": "бот уничтожен",
@@ -553,10 +548,7 @@ const UK = {
   "cell.BlockMilitary3": "перегрітий військовий блок", "cell.BlockEnergy0": "енергоблок",
   "cell.BlockEnergy1": "напіврозряджений енергоблок", "cell.BlockEnergy2": "виснажений енергоблок", "cell.TechHole": "технічна діра",
   "cell.BlackHole": "чорна діра", "cell.BackWorn": "протертий фон", "cell.Protofluid": "протофлюїд",
-  "brush.Back": "Задник", "brush.Road": "Дорога", "brush.Regolith": "Реголіт", "brush.Chondrite": "Хондрит",
-  "brush.SulfideRock": "Сульфід", "brush.DenseOre": "Шеєліт", "brush.WaterIce": "Гідратна жила",
-  "brush.SinterCrust": "Спечена кірка", "brush.MetallicCrust": "Імпактит", "brush.BlockSimple": "Крихкий блок",
-  "brush.TectonicMass": "Стіна (не копається)",
+
   "sim.init": "Ініціатор", "sim.initTip": "Сейсмоініціатор (5×5): клік ставить, клік по ньому прибирає",
   "sim.initBad": "Тут немає місця для ініціатора: для його 5×5 потрібен проміжок в 1 клітинку до інших ініціаторів і до краю.",
   "sim.dead": "бота знищено",

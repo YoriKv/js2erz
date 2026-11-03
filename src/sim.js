@@ -32,10 +32,10 @@ export function cellColor(name) {
   return isWalkable(name) ? "#241d18" : "#5a4a3a";
 }
 export const BRUSHES = [
-  ["Back", "Dug out"], ["Road", "Road"], ["Regolith"], ["Chondrite"], ["SulfideRock"],
+  ["Back"], ["Road"], ["Regolith"], ["Chondrite"], ["SulfideRock"],
   ["DenseOre"], ["WaterIce"], ["Breccia"], ["ConsolidatedRock"], ["SilicateRock"], ["MetallicRock"],
   ["PhosphateRock"], ["CarbonaceousRock"], ["CryoIce"], ["SinterCrust"], ["MetallicCrust"],
-  ["BlockSimple"], ["TectonicMass", "Wall (undiggable)"],
+  ["BlockSimple"], ["TectonicMass"],
 ].map(([cell, label]) => ({ cell, label, color: cellColor(cell) }));
 
 // ---------------------------------------------------------------- geometry
