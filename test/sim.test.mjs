@@ -321,13 +321,12 @@ test("seismic: worlds without an initiator behave as before", () => {
   assert.equal(a.seismic, null); assert.equal(a.dead, null); assert.equal(a.triggerBreak, undefined);
 });
 
-test("makeSeismicWorld: reproducible, initiator in the middle, bot inside the radius on open ground", () => {
+test("makeSeismicWorld: reproducible, initiator in the middle, bot on its centre", () => {
   const a = makeSeismicWorld(128, 96, 9), b = makeSeismicWorld(128, 96, 9);
   assert.deepEqual(a.cells, b.cells); assert.deepEqual(a.initiators, b.initiators);
   assert.deepEqual(a.initiators, [{ x: 64, y: 48, drills: 3 }]);
-  const d = Math.hypot(a.bot.x - 65, a.bot.y - 49);
-  assert.ok(d > 10 && d < 30, `bot ${d} cells from the break centre`);
-  assert.equal(cellAt(a, a.bot.x, a.bot.y), "Back");
+  assert.deepEqual(a.bot, { x: 64, y: 48 });
+  assert.equal(initiatorAt(a, a.bot.x, a.bot.y), 0, "bot on the footprint");
   assert.ok(minedShare(a, a.initiators[0]) < 0.3);
 });
 

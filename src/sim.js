@@ -141,7 +141,7 @@ export function makeSeismicWorld(W = 128, H = 96, seed) {
   seed = toSeed(seed);
   const cells = terrain(W, H, mulberry32(seed));
   const ix = W >> 1, iy = H >> 1;
-  const bot = { x: Math.min(W - 6, ix + 20), y: iy };
+  const bot = { x: ix, y: iy };   // the bot starts on the initiator's centre (where a break can't hurt it)
   const w = { W, H, seed, cells, bot, initiators: [] };
   stampInitiator(w, ix, iy, 3);
   discCells(w, w.initiators[0], SEISMIC_DEFAULTS, (x, y) => { if (cells[y * W + x] === "MetallicCrust") cells[y * W + x] = "SinterCrust"; });
