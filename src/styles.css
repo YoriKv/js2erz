@@ -29,6 +29,8 @@ code, kbd { font-family: var(--f-mono); font-size: 12.5px; }
 .brand small { font: 400 12px var(--f-body); color: var(--muted); letter-spacing: 0; margin-left: 6px; }
 .grp { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .grp.right { margin-left: auto; }
+#exSel { width: 7.5em; }
+#fileSel { max-width: 15em; }
 #progTabs button { font: 600 13px var(--f-title); letter-spacing: .03em; }
 #progTabs button small { font-weight: 400; color: inherit; opacity: .7; margin-left: 4px; }
 #banner { padding: 6px 14px; background: #3a2c14; color: var(--warn); border-bottom: 1px solid var(--line); font-size: 13px; display: flex; gap: 10px; align-items: center; }

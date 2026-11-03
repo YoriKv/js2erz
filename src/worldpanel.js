@@ -513,6 +513,8 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
   return {
     refresh() { draw(); renderInfo(); },
     stop,
+    // another program tab was opened: reset, unless that program is on the running simulation's call stack
+    programSwitched(name) { if (sim && !(sim.status === "run" && sim.frames.some(f => f.program === name))) stop(); },
     resize() { fitted = false; draw(); },
   };
 }

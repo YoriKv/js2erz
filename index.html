@@ -13,7 +13,10 @@
   <header id="top">
     <span class="brand">js2erz <small data-i18n="brand.sub">JavaScript → Programmator</small></span>
     <div class="grp">
-      <select id="exSel" aria-label="Examples" data-i18n-aria="top.examplesAria"><option value="" data-i18n="top.examples">Examples…</option></select>
+      <select id="fileSel" aria-label="Saved programs" data-i18n-aria="file.aria" data-i18n-title="file.tip" title="Your programs, saved in this browser. Editing a template saves it as a new program."></select>
+      <button id="bRename" type="button" title="Rename this program" data-i18n="file.rename" data-i18n-title="file.renameTip">Rename</button>
+      <button id="bDelete" type="button" title="Delete this program" data-i18n="file.delete" data-i18n-title="file.deleteTip">Delete</button>
+      <select id="exSel" aria-label="New program from a template" data-i18n-aria="top.examplesAria"><option value="" data-i18n="top.examples">New…</option></select>
       <button id="bCompile" type="button" title="Compile now (Ctrl+Enter)" data-i18n="top.compile" data-i18n-title="top.compileTip">Compile</button>
       <label title="Recompile while you type" data-i18n-title="top.liveTip"><input type="checkbox" id="optLive" checked> <span data-i18n="top.live">live</span></label>
     </div>

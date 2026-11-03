@@ -22,7 +22,9 @@ unload(Target.Storage);
   [erzstat.site](https://erzstat.site/programs/) editor.
 - Check the program in the built-in simulator before you build it.
 
-The **Reference** tab lists every function, constant and system variable, and the **Examples** menu has programs to start from.
+Your programs are saved in the browser. **New…** starts one from a blank page or an example; editing a template
+saves it as a new program, which you can rename. The **Reference** tab lists every function, constant and system
+variable.
 
 ## Run it locally
 

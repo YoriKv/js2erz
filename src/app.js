@@ -79,17 +79,63 @@ function summary(n) {
   }
 }
 
+// ---------------------------------------------------------------- saved programs and templates
+// store.files: [{id, name, code, t}] (the user's programs); store.cur: {file: id} or {tpl: id} (a template, not saved).
+// Editing a template saves it as a new program, which is autosaved from then on.
+const BLANK = { id: "blank", code: `"use program Main";\n\n` };
+let linkCode = null;      // code from a #code= link: a template of its own until edited
+{
+  const m = location.hash.match(/code=([^&]+)/);
+  if (m) { try { linkCode = decodeURIComponent(escape(atob(m[1].replace(/-/g, "+").replace(/_/g, "/")))); } catch (e) { /* bad link */ } }
+}
+store.files = store.files || [];
+if (store.source != null) {            // before saved programs there was one autosaved source
+  const ex = EXAMPLES.find(x => x.code === store.source);
+  if (ex) store.cur = { tpl: ex.id };
+  else if (store.source.trim()) { const f = { id: fileId(), name: t("file.mine"), code: store.source, t: Date.now() }; store.files.push(f); store.cur = { file: f.id }; }
+  delete store.source; save();
+}
+function fileId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+const curFile = () => (store.cur && store.cur.file ? store.files.find(f => f.id === store.cur.file) : null);
+const template = id => id === "blank" ? BLANK : id === "link" ? { id, code: linkCode ?? "" } : EXAMPLES.find(x => x.id === id);
+const tplTitle = id => id === "blank" ? t("tpl.blank") : id === "link" ? t("file.link") : tOr("ex." + id, template(id)?.title || id);
+if (linkCode != null) { const same = store.files.find(f => f.code === linkCode); store.cur = same ? { file: same.id } : { tpl: "link" }; }
+if (!curFile() && !(store.cur && store.cur.tpl && template(store.cur.tpl))) store.cur = { tpl: EXAMPLES[0].id };
+const curCode = () => (curFile() ? curFile().code : template(store.cur.tpl).code);
+function uniqueName(base, except) {
+  const taken = new Set(store.files.filter(f => f !== except).map(f => f.name));
+  if (!taken.has(base)) return base;
+  for (let i = 2; ; i++) if (!taken.has(`${base} ${i}`)) return `${base} ${i}`;
+}
+// a new program from the template being edited: named after its "use program" name, else the template
+function saveTemplateAs(code) {
+  const id = store.cur.tpl, m = template(id).code.match(/"use program\s+([^"]+)"/);
+  const base = id === "blank" ? t("file.untitled") : id === "link" ? (m ? m[1].trim() : t("file.link")) : m ? m[1].trim() : tplTitle(id);
+  const f = { id: fileId(), name: uniqueName(base), code, t: Date.now() };
+  store.files.push(f); store.cur = { file: f.id }; save();
+  if (id === "link") { linkCode = null; history.replaceState(null, "", location.href.replace(/([#&])code=[^&]*&?/, "$1").replace(/[#&]$/, "")); }
+  renderFiles(); toast(t("file.created", f.name));
+}
+function onEdit(v) {
+  const f = curFile();
+  if (f) { f.code = v; f.t = Date.now(); save(); } else saveTemplateAs(v);
+}
+// switch to a saved program or a template: new code, fresh graph, simulator reset
+function openCur(cur) {
+  store.cur = cur; save();
+  editor.setValue(curCode());
+  compiled.forEach(c => { c.edited = false; });
+  world && world.stop();
+  runCompile(true);
+  renderFiles();
+}
+
 // ---------------------------------------------------------------- editor + compile
 const editor = createEditor($("editor"), {
-  value: initialSource(),
-  onChange: v => { store.source = v; save(); if (store.opts.live) scheduleCompile(); },
+  value: curCode(),
+  onChange: v => { onEdit(v); if (store.opts.live) scheduleCompile(); },
   onCursor: (line, endLine) => { highlightNodesForLines(line, endLine ?? line); },
 });
-function initialSource() {
-  const m = location.hash.match(/code=([^&]+)/);
-  if (m) { try { return decodeURIComponent(escape(atob(m[1].replace(/-/g, "+").replace(/_/g, "/")))); } catch (e) { /* bad link */ } }
-  return store.source ?? EXAMPLES[0].code;
-}
 let compileTimer = null;
 function scheduleCompile() { clearTimeout(compileTimer); compileTimer = setTimeout(() => runCompile(false), 350); }
 
@@ -164,7 +210,7 @@ function renderTabs() {
     b.type = "button"; b.setAttribute("role", "tab");
     b.className = i === cur ? "on" : "";
     b.innerHTML = `${esc(tb.prog.name)}<small>${tb.prog.nodes.length}${tb.imported ? t("ptab.imported") : tb.edited ? t("ptab.edited") : ""}</small>`;
-    b.addEventListener("click", () => { cur = i; sel.clear(); selEdge = null; activePort = null; renderTabs(); if (!view().view) fit(); else render(); renderSide(); });
+    b.addEventListener("click", () => { if (i !== cur) world && world.programSwitched(tb.prog.name); cur = i; sel.clear(); selEdge = null; activePort = null; renderTabs(); if (!view().view) fit(); else render(); renderSide(); });
     if (tb.imported) {
       b.title = t("ptab.importedTip");
       b.addEventListener("dblclick", () => { if (confirm(t("ptab.remove", tb.prog.name))) { imported = imported.filter(p => p !== tb.prog); persistImported(); cur = 0; renderTabs(); fit(); renderSide(); } });
@@ -721,16 +767,35 @@ $("bShare").addEventListener("click", () => {
 function renderExamples() {
   const s = $("exSel");
   while (s.options.length > 1) s.remove(1);
+  s.append(el("option", { value: "blank" }, t("tpl.blank")));
   for (const ex of EXAMPLES) s.append(el("option", { value: ex.id }, tOr("ex." + ex.id, ex.title)));
 }
 renderExamples();
 $("exSel").addEventListener("change", e => {
-  const ex = EXAMPLES.find(x => x.id === e.target.value); e.target.value = "";
-  if (!ex) return;
-  if (editor.value.trim() && editor.value !== ex.code && !EXAMPLES.some(x => x.code === editor.value) && !confirm(t("ex.confirm"))) return;
-  editor.setValue(ex.code); store.source = ex.code; save();
-  compiled.forEach(c => { c.edited = false; });
-  runCompile(true);
+  const id = e.target.value; e.target.value = "";
+  if (template(id)) openCur({ tpl: id });
+});
+function renderFiles() {
+  const s = $("fileSel"), f = curFile();
+  s.innerHTML = "";
+  if (!f) s.append(el("option", { value: "" }, t("file.template", tplTitle(store.cur.tpl))));
+  for (const g of store.files.slice().sort((a, b) => a.name.localeCompare(b.name))) s.append(el("option", { value: g.id }, g.name));
+  s.value = f ? f.id : "";
+  $("bRename").disabled = $("bDelete").disabled = !f;
+}
+renderFiles();
+$("fileSel").addEventListener("change", e => { if (e.target.value) openCur({ file: e.target.value }); });
+$("bRename").addEventListener("click", () => {
+  const f = curFile(); if (!f) return;
+  const n = prompt(t("file.renamePrompt"), f.name);
+  if (n == null || !n.trim()) return;
+  f.name = uniqueName(n.trim(), f); save(); renderFiles();
+});
+$("bDelete").addEventListener("click", () => {
+  const f = curFile(); if (!f || !confirm(t("file.deleteConfirm", f.name))) return;
+  store.files = store.files.filter(g => g !== f);
+  const next = store.files.slice().sort((a, b) => b.t - a.t)[0];
+  openCur(next ? { file: next.id } : { tpl: "blank" });
 });
 $("bCompile").addEventListener("click", () => runCompile(true));
 $("optLive").checked = store.opts.live;
@@ -776,7 +841,7 @@ function applyStatic() {
 onLangChange(() => {
   $("langSel").value = getLang();
   closeModal();
-  applyStatic(); renderExamples(); renderTabs(); renderPalette();
+  applyStatic(); renderExamples(); renderFiles(); renderTabs(); renderPalette();
   if (lastErr) renderDiag(null, lastErr); else if (lastRes) renderDiag(lastRes, null);
   if (!$("banner").hidden) showBanner();
   render(); renderSide();
