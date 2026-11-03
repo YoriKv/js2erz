@@ -77,10 +77,10 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
       <button type="button" class="wp-stop" data-k="sim.stop" data-kt="sim.stopTip"></button>
       <label class="wp-l"><span data-k="sim.speed"></span> <input class="wp-speed" type="range" min="0" max="100" data-ka="sim.speedAria"></label>
       <span class="wp-nps wp-m"></span>
+      <span class="wp-help" tabindex="0" data-ka="sim.help">?<span class="wp-helpbox" role="tooltip"></span></span>
     </div>
     <div class="wp-brushes" role="toolbar" data-ka="sim.brushes"></div>
-    <div class="wp-cvbox"><canvas class="wp-cv"></canvas></div>
-    <div class="wp-hint wp-m" aria-live="polite"></div>
+    <div class="wp-cvbox"><canvas class="wp-cv"></canvas><div class="wp-note" aria-live="polite" hidden></div></div>
     <div class="wp-row">
       <select class="wp-size" data-ka="sim.size">${SIZES.map(([w, h]) => `<option value="${w}x${h}">${w}×${h}</option>`).join("")}</select>
       <label class="wp-l"><span data-k="sim.seed"></span> <input class="wp-seed" type="number" style="width:84px"></label>
@@ -142,18 +142,27 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
   dirSel.addEventListener("change", () => { state.settings.dir = +dirSel.value; save(state); draw(); });
   speed.addEventListener("input", () => { state.settings.speed = +speed.value; updSpeed(); save(state); });
 
-  const brushBar = $(".wp-brushes"), hint = $(".wp-hint");
-  let pickNote = "";                 // eyedropper message that replaces the hint line until the next pick
-  const renderHint = () => { hint.textContent = pickNote || `${t("sim.alt")} ${t("sim.ctrl")}`; };
+  const brushBar = $(".wp-brushes"), note = $(".wp-note"), helpBox = $(".wp-helpbox");
+  const renderHelp = () => {
+    helpBox.innerHTML = [t("sim.hint", t("sim.run"), t("sim.debug")), t("sim.ctrl"), t("sim.alt"), t("sim.helpView"), t("sim.helpUndo")]
+      .map(l => `<span>${esc(l)}</span>`).join("");
+  };
+  renderHelp();
+  // a short message over the bottom of the map (eyedropper / initiator placement), gone after a few seconds
+  let noteTimer = 0;
+  const showNote = msg => {
+    clearTimeout(noteTimer);
+    note.textContent = msg; note.hidden = !msg;
+    if (msg) noteTimer = setTimeout(() => { note.hidden = true; }, 4000);
+  };
   function renderBrushes() {
     brushBar.innerHTML = BRUSHES.map(b => `<button type="button" class="wp-br${state.settings.brush === b.cell ? " on" : ""}" data-b="${b.cell}" title="Cell.${esc(b.cell)}"><span class="wp-sw" style="background:${b.color}"></span>${esc(brushLabel(b))}</button>`).join("")
       + `<button type="button" class="wp-br${state.settings.brush === "bot" ? " on" : ""}" data-b="bot" title="${esc(t("sim.botTip"))}"><span class="wp-sw" style="background:#414893"></span>${esc(t("sim.bot"))}</button>`
       + `<button type="button" class="wp-br${state.settings.brush === "initiator" ? " on" : ""}" data-b="initiator" title="${esc(t("sim.initTip"))}"><span class="wp-sw wp-sw-init" style="background:${INIT_COLOR}"></span>${esc(t("sim.init"))}</button>`;
   }
   const setBrush = b => { state.settings.brush = b; renderBrushes(); save(state); };
-  brushBar.addEventListener("click", e => { const b = e.target.closest("[data-b]"); if (!b) return; pickNote = ""; setBrush(b.dataset.b); renderHint(); });
+  brushBar.addEventListener("click", e => { const b = e.target.closest("[data-b]"); if (!b) return; showNote(""); setBrush(b.dataset.b); });
   renderBrushes();
-  renderHint();
 
   // ---------------------------------------------------------------- drawing history (Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z)
   const hist = { undo: [], redo: [] }, HIST_MAX = 60;
@@ -365,7 +374,7 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
     }).join("");
   }
   function renderInfo() {
-    if (!sim) { info.innerHTML = `<div class="wp-m">${esc(t("sim.hint", t("sim.run"), t("sim.debug"), state.world.bot.x, state.world.bot.y))}</div>${seismicInfo()}`; return; }
+    if (!sim) { info.innerHTML = `<div class="wp-m">${esc(t("sim.botAt", state.world.bot.x, state.world.bot.y))}</div>${seismicInfo()}`; return; }
     const cur = sim.current(), { programs } = getPrograms();
     const node = cur && programs.get(cur.program)?.nodes.find(n => n.id === cur.node);
     const top = sim.frames[sim.frames.length - 1];
@@ -403,10 +412,10 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
       const br = BRUSHES.find(q => q.cell === c) || BRUSHES.find(q => q.cell === ALIAS[c]);
       const same = BRUSHES.filter(q => q.color === cellColor(c));   // drawn in exactly one brush's colour
       pick = br ? br.cell : same.length === 1 ? same[0].cell : null;
-      if (!pick) { pickNote = t("sim.noBrush", `${cellName(c)} (Cell.${c})`); renderHint(); return; }
+      if (!pick) { showNote(t("sim.noBrush", `${cellName(c)} (Cell.${c})`)); return; }
     }
-    pickNote = "";
-    setBrush(pick); renderHint();
+    showNote("");
+    setBrush(pick);
   }
   cv.addEventListener("mousedown", e => { if (e.altKey) e.preventDefault(); });
   cv.addEventListener("pointerenter", e => { overCanvas = true; setAlt(e.altKey); });
@@ -451,8 +460,8 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
       if (drag.stamped) return;
       drag.stamped = true;
       if (onInit >= 0) { w.initiators.splice(onInit, 1); if (!w.initiators.length) delete w.initiators; }
-      else if (!stampInitiator(w, x, y)) { pickNote = t("sim.initBad"); renderHint(); return; }
-      pickNote = ""; renderHint();
+      else if (!stampInitiator(w, x, y)) { showNote(t("sim.initBad")); return; }
+      showNote("");
     } else if (state.settings.brush === "bot") {
       const bx = Math.min(w.W - 2, Math.max(1, x)), by = Math.min(w.H - 2, Math.max(1, y));
       w.bot = { x: bx, y: by };
@@ -506,7 +515,7 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
   const ro = new ResizeObserver(() => draw());
   ro.observe(box);
   update();
-  onLangChange(() => { relabel(); updSpeed(); renderBrushes(); renderHint(); renderInfo(); });
+  onLangChange(() => { relabel(); updSpeed(); renderBrushes(); renderHelp(); renderInfo(); });
 
   return {
     refresh() { draw(); renderInfo(); },
