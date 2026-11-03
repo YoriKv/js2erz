@@ -17,7 +17,7 @@
 .wp .wp-brushes { border-bottom: 1px solid var(--wp-line); gap: 4px; }
 .wp .wp-l { display: flex; align-items: center; gap: 4px; color: var(--wp-muted); }
 .wp .wp-m { color: var(--wp-muted); }
-.wp .wp-debug { background: #c96f3b; border-color: #c96f3b; color: #fff; font-weight: 700; letter-spacing: .06em; }
+.wp .wp-step { background: #c96f3b; border-color: #c96f3b; color: #fff; font-weight: 700; letter-spacing: .06em; }
 .wp .wp-run { background: #e3b53c; border-color: #e3b53c; color: #15110e; font-weight: 700; letter-spacing: .06em; }
 .wp .wp-nps { font-variant-numeric: tabular-nums; min-width: 82px; }
 .wp .wp-br { display: flex; align-items: center; gap: 4px; padding: 2px 6px; font-size: 12px; }

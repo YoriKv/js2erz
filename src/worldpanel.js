@@ -1,4 +1,4 @@
-// World panel: paint a sandbox world and run the compiled programs in it (RUN / DEBUG / Pause / Stop).
+// World panel: paint a sandbox world and run the compiled programs in it (RUN / STEP / Pause / Stop).
 import { T, DIR_ARROW, CELLS } from "./nodes.js";
 import { createSim, makeWorld, emptyWorld, cellAt, cellColor, BRUSHES, DV, fmtValue,
   SEISMIC_DEFAULTS, FOOT, stampInitiator, initiatorAt, minedShare, breakCentre } from "./sim.js";
@@ -71,7 +71,7 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
   root.innerHTML = `
     <div class="wp-bar">
       <label class="wp-l"><span data-k="sim.start"></span> <select class="wp-dir" data-ka="sim.startAria"></select></label>
-      <button type="button" class="wp-debug" data-k="sim.debug" data-kt="sim.debugTip"></button>
+      <button type="button" class="wp-step" data-k="sim.step" data-kt="sim.stepTip"></button>
       <button type="button" class="wp-run" data-k="sim.run"></button>
       <button type="button" class="wp-pause" data-k="sim.pause"></button>
       <button type="button" class="wp-stop" data-k="sim.stop" data-kt="sim.stopTip"></button>
@@ -144,7 +144,7 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
 
   const brushBar = $(".wp-brushes"), note = $(".wp-note"), helpBox = $(".wp-helpbox");
   const renderHelp = () => {
-    helpBox.innerHTML = [t("sim.hint", t("sim.run"), t("sim.debug")), t("sim.ctrl"), t("sim.alt"), t("sim.helpView"), t("sim.helpUndo")]
+    helpBox.innerHTML = [t("sim.hint", t("sim.run"), t("sim.step")), t("sim.ctrl"), t("sim.alt"), t("sim.helpView"), t("sim.helpUndo")]
       .map(l => `<span>${esc(l)}</span>`).join("");
   };
   renderHelp();
@@ -243,7 +243,7 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
     if (!raf) raf = requestAnimationFrame(tick);
     update();
   }
-  function debugStep() {
+  function step() {
     if (!sim || sim.status !== "run") start();
     else { pause(); sim.step(); }
     update();
@@ -252,7 +252,7 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
   function reset() { paused = true; if (raf) cancelAnimationFrame(raf); raf = 0; sim = null; }
   function stop() { reset(); update(); }
   $(".wp-run").addEventListener("click", run);
-  $(".wp-debug").addEventListener("click", debugStep);
+  $(".wp-step").addEventListener("click", step);
   $(".wp-pause").addEventListener("click", pause);
   $(".wp-stop").addEventListener("click", stop);
 

@@ -10,6 +10,7 @@ import { t, tOr, has, builtinDoc, getLang, setLang, onLangChange, LANGS } from "
 import { createEditor } from "./codeedit.js";
 import { EXAMPLES } from "./examples.js";
 import { mountWorldPanel } from "./worldpanel.js";
+import { createInspector } from "./inspector.js";
 
 const $ = id => document.getElementById(id);
 const LS = "js2erz.v1";
@@ -46,38 +47,6 @@ const drawLabels = () => ({
   node: nodeLabel, cat: catLabel, dir: d => t("dirs." + d), item: itemLabel, target: targetLabel, bot: () => t("inv.bot"),
   outTip: (ty, key, label) => { const d = outDesc(ty, key); return d ? `${label} — ${d}` : label; },
 });
-function aimSummary(p, rel) {
-  if (rel) {
-    const parts = [];
-    if (p.front) parts.push(p.front > 0 ? t("aim.front", p.front) : t("aim.back", -p.front));
-    if (p.right) parts.push(p.right > 0 ? t("aim.right", p.right) : t("aim.left", -p.right));
-    return parts.join(", ") || t("aim.centre");
-  }
-  const sg = v => (v >= 0 ? "+" : "") + v;
-  return `X${sg(p.right)} Y${sg(p.front)}`;
-}
-// one-line description of a node's settings (nodes.js nodeSummary, in the UI language)
-function summary(n) {
-  const p = n.p || {};
-  switch (n.t) {
-    case "start": return p.params && p.params.length ? `${t("ins.params")}: ${p.params.join(", ")}` : "";
-    case "rotA": return `${DIR_ARROW[((p.dir % 8) + 8) % 8]} ${dirName(p.dir)}`;
-    case "rotR": return REL_ROT[p.dir] || String(p.dir);
-    case "aimA": return aimSummary(p, false);
-    case "aimR": return aimSummary(p, true);
-    case "scan": return catLabel(p.category);
-    case "use": return itemLabel(p.item);
-    case "inv": return p.positive ? `${t("inv.bot")} → ${targetLabel(p.target)}` : `${targetLabel(p.target)} → ${t("inv.bot")}`;
-    case "call": return p.program + (p.args && p.args.length ? `(${p.args.map(fmtOperand).join(", ")})` : "");
-    case "exit": return p.fail ? t("exit.fail") : t("exit.success");
-    case "assign": return `${p.varname} = ${fmtOperand(p.value)}`;
-    case "oper": return `${p.varname} = ${fmtOperand(p.left)} ${OP_SYM[p.op] || "?"} ${fmtOperand(p.right)}`;
-    case "cmp": return `${fmtOperand(p.left)} ? ${fmtOperand(p.right)}`;
-    case "eq": return `${fmtOperand(p.value)} ∈ {${(p.set || []).map(fmtOperand).join(", ")}}`;
-    case "cell": return `${fmtOperand(p.value)} ∈ ${catLabel(p.category)}`;
-    default: return "";
-  }
-}
 
 // ---------------------------------------------------------------- saved programs and templates
 // store.files: [{id, name, code, t}] (the user's programs); store.cur: {file: id} or {tpl: id} (a template, not saved).
@@ -508,117 +477,18 @@ function el(tag, attrs = {}, ...kids) {
   for (const k of kids) if (k != null) e.append(k);
   return e;
 }
-function parseOperand(s) {
-  s = s.trim();
-  if (s === "") return null;
-  if (/^-?\d+(\.\d+)?$/.test(s)) return { num: +s };
-  const c = s.replace(/^Cell\./, "");
-  if (CELLS.includes(c) && (s.startsWith("Cell.") || !/^[a-z]/.test(c))) return { cell: c };
-  return { var: s };
-}
-const operandText = o => o == null ? "" : o.cell != null ? "Cell." + o.cell : fmtOperand(o);
-function edit(fn) { snapshot(); fn(); markEdited(); render(); renderInspector(); }
-function selectBox(options, value, onchange) {
-  const s = el("select", { onchange: () => onchange(s.value) });
-  for (const [v, label] of options) s.append(el("option", { value: v, selected: String(v) === String(value) }, label));
-  return s;
-}
-function operandInput(get, set, label) {
-  const i = el("input", { value: operandText(get()), size: 16, placeholder: t("ins.operandPh"), list: "varlist",
-    onchange: () => edit(() => set(parseOperand(i.value))) });
-  return el("div", { class: "row" }, el("span", { class: "lbl" }, label), i);
-}
-// the node editor floats over the canvas while one node or one arrow is selected
-function renderInspector() {
-  const box = $("inspector"); box.innerHTML = "";
-  const v = view();
-  box.hidden = !v || !(selEdge || sel.size === 1);
-  if (box.hidden) return;
-  const p = v.prog;
-  box.append(el("button", { type: "button", class: "close", title: t("ins.close"), "aria-label": t("ins.close"),
-    onclick: () => { sel.clear(); selEdge = null; render(); renderSide(); } }, "×"));
-  const lbl = s => el("span", { class: "lbl" }, s);
-  if (selEdge) {
-    const a = p.nodes[selEdge.id], o = T[a.t].outs[selEdge.i];
-    box.append(el("h2", {}, t("ins.arrow")), el("p", {}, t("ins.arrowText", a.id, nodeLabel(a.t), o[1], a.outs[selEdge.i])),
-      el("div", { class: "row" }, el("button", { type: "button", onclick: () => deleteSelection() }, t("ins.disconnectDel"))));
-    return;
-  }
-  const n = p.nodes[[...sel][0]], tp = T[n.t];
-  box.append(el("h2", {}, el("span", { class: "chip", style: `background:${tp.bg};color:${tp.fg || TITLE}` }, nodeLabel(n.t)), `#${n.id}`));
-  const desc = nodeDesc(n);
-  if (desc) box.append(el("p", { class: "note" }, desc));
-  if (n.src) box.append(el("div", { class: "row" }, lbl(t("ins.source")),
-    el("button", { type: "button", class: "link", onclick: () => editor.select(n.src.line, n.src.col) },
-      n.src.endLine > n.src.line ? t("ins.lines", n.src.line, n.src.endLine) : t("ins.line", n.src.line))));
-  const s = summary(n);
-  if (s) box.append(el("p", {}, s));
-  if (tp.tech) box.append(el("p", { class: "note" }, t("ins.needs", techLabel(tp.tech))));
-  const sec = el("div", { class: "sec" }, el("h3", {}, t("ins.settings")));
-  const P = n.p;
-  const row = (label, ...kids) => el("div", { class: "row" }, lbl(label), ...kids);
-  switch (n.t) {
-    case "start": sec.append(row(t("ins.params"),
-      el("input", { value: (P.params || []).join(", "), onchange: e => edit(() => { P.params = e.target.value.split(",").map(x => x.trim()).filter(Boolean); }) }))); break;
-    case "rotA": {
-      const c = el("div", { class: "compass" });
-      [5, 6, 7, 4, null, 0, 3, 2, 1].forEach(d => c.append(d == null ? el("span") :
-        el("button", { type: "button", class: P.dir === d ? "on" : "", title: dirName(d), "aria-label": dirName(d), onclick: () => edit(() => { P.dir = d; }) }, DIR_ARROW[d])));
-      sec.append(row(t("f.direction"), c)); break;
-    }
-    case "rotR": sec.append(row(t("f.direction"), selectBox(Object.entries(REL_ROT).sort((a, b) => a[0] - b[0]), P.dir, v2 => edit(() => { P.dir = +v2; })))); break;
-    case "aimA": case "aimR": {
-      const rel = n.t === "aimR", g = el("div", { class: "grid7" });
-      for (let r = -3; r <= 3; r++) for (let c = -3; c <= 3; c++) {
-        const hit = rel ? (P.right === c && P.front === -r) : (P.right === c && P.front === r);
-        g.append(el("button", { type: "button", class: hit ? "on" : Math.abs(r) <= 1 && Math.abs(c) <= 1 ? "body" : "",
-          title: rel ? t("ins.aimRelTip", -r, c) : t("ins.aimAbsTip", c, r), onclick: () => edit(() => { P.right = c; P.front = rel ? -r : r; }) }, c === 0 && r === 0 ? "●" : ""));
-      }
-      sec.append(g, el("p", { class: "note" }, rel ? t("ins.aimRelNote") : t("ins.aimAbsNote"))); break;
-    }
-    case "scan": case "cell":
-      if (n.t === "cell") sec.append(operandInput(() => P.value, x => { P.value = x; }, t("f.cell")));
-      sec.append(row(t("f.category"), selectBox(CATEGORIES.map(c => [c, catLabel(c)]), P.category, v2 => edit(() => { P.category = v2; })))); break;
-    case "use": sec.append(row(t("f.item"), selectBox(ITEMS.map(i => [i, itemLabel(i)]), P.item, v2 => edit(() => { P.item = v2; })))); break;
-    case "inv":
-      sec.append(row(t("f.target"), selectBox(INV_TARGETS.map(i => [i, targetLabel(i)]), P.target, v2 => edit(() => { P.target = v2; }))),
-        row(t("f.direction"), selectBox([["true", t("ins.unload")], ["false", t("ins.load")]], String(P.positive), v2 => edit(() => { P.positive = v2 === "true"; })))); break;
-    case "call":
-      sec.append(row(t("f.program"), el("input", { value: P.program, onchange: e => edit(() => { P.program = e.target.value.trim(); }) })),
-        row(t("f.args"), el("input", { value: (P.args || []).map(operandText).join(", "),
-          onchange: e => edit(() => { P.args = e.target.value.split(",").map(parseOperand).filter(Boolean); }) }))); break;
-    case "exit": sec.append(row(t("f.exitVia"), selectBox([["false", t("exit.success")], ["true", t("exit.fail")]], String(!!P.fail), v2 => edit(() => { P.fail = v2 === "true"; })))); break;
-    case "assign":
-      sec.append(row(t("f.variable"), el("input", { value: P.varname, onchange: e => edit(() => { P.varname = e.target.value.trim(); }) })),
-        operandInput(() => P.value, x => { P.value = x; }, t("f.value"))); break;
-    case "oper":
-      sec.append(row(t("f.variable"), el("input", { value: P.varname, onchange: e => edit(() => { P.varname = e.target.value.trim(); }) })),
-        operandInput(() => P.left, x => { P.left = x; }, t("f.left")),
-        row(t("f.operation"), selectBox(OPS.map(o => [o, `${OP_SYM[o]}  ${t("op." + o)}`]), P.op, v2 => edit(() => { P.op = v2; }))),
-        operandInput(() => P.right, x => { P.right = x; }, t("f.right"))); break;
-    case "cmp": sec.append(operandInput(() => P.left, x => { P.left = x; }, t("f.left")), operandInput(() => P.right, x => { P.right = x; }, t("f.right"))); break;
-    case "eq":
-      sec.append(operandInput(() => P.value, x => { P.value = x; }, t("f.value")),
-        row(t("f.anyOf"), el("input", { value: (P.set || []).map(operandText).join(", "), size: 28,
-          onchange: e => edit(() => { P.set = e.target.value.split(",").map(parseOperand).filter(Boolean); }) }))); break;
-    default: sec.append(el("p", { class: "note" }, t("ins.noSettings")));
-  }
-  box.append(sec);
-  if (tp.outs.length) {
-    const outs = el("div", { class: "outs" });
-    n.outs.forEach((o, i) => {
-      const [key, label, col] = tp.outs[i], d = outDesc(n.t, key);
-      outs.append(el("div", { class: "out", title: o == null ? (d ? d + "\n" : "") + t("out.notConnected") : d || false },
-        el("span", { class: "dot", style: `background:${col}` }), el("span", {}, label),
-        o == null ? el("span", { class: "tgt" }, "END") : el("button", { type: "button", class: "link tgt", onclick: () => { sel = new Set([o]); render(); renderSide(); revealNode(p.nodes[o]); } }, `→ #${o} ${nodeLabel(p.nodes[o].t)}`),
-        o == null ? el("span") : el("button", { type: "button", class: "x", title: t("ins.disconnect"), "aria-label": t("ins.disconnect"), onclick: () => { setOut(n.id, i, null); render(); renderSide(); } }, "×")));
-    });
-    box.append(el("div", { class: "sec" }, el("h3", {}, t("ins.outputs")), outs));
-  }
-  const preds = p.nodes.filter(a => a.outs.includes(n.id));
-  if (preds.length) box.append(el("div", { class: "sec" }, el("h3", {}, t("ins.comesFrom")),
-    el("div", { class: "chips" }, ...preds.map(a => el("button", { type: "button", class: "link", onclick: () => { sel = new Set([a.id]); render(); renderSide(); } }, `#${a.id} ${nodeLabel(a.t)}`)))));
-}
+// the node editor (src/inspector.js) floats over the canvas while one node is selected
+const inspector = createInspector({
+  box: $("inspector"), overlay: $("graphPane"),
+  node: () => { const v = view(); return v && sel.size === 1 && !selEdge ? v.prog.nodes[[...sel][0]] || null : null; },
+  snapshot, commit: () => { markEdited(); render(); },
+  close: () => { sel.clear(); selEdge = null; render(); renderSide(); },
+  remove: () => deleteSelection(),
+  selectLine: src => editor.select(src.line, src.col),
+  programNames: () => [...new Set(tabs().map(x => x.prog.name))],
+  nodeLabel, nodeDesc, outDesc, catLabel, itemLabel, dirName,
+});
+function renderInspector() { inspector.render(); }
 function renderGraphHelp() {
   $("graphHelp").replaceChildren(...["help.click", "help.hover", "help.view", "help.wire", "help.keys"].map(k => el("span", {}, t(k))));
 }
@@ -648,8 +518,6 @@ function renderRef() {
       el("p", { class: "note" }, t("ref.writable", WRITABLE_BUILTINS.join(", ")))));
 }
 // datalist of known variables for operand inputs
-const varlist = el("datalist", { id: "varlist" }, ...BUILTIN_VARS.map(v => el("option", { value: v })));
-document.body.append(varlist);
 
 // ---------------------------------------------------------------- simulator
 let world = null;
