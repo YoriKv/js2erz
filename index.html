@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>js2erz — JavaScript to ERZ Programmator nodes</title>
+<meta name="description" content="Write a JavaScript program, get the ERZ Programmator node graph to rebuild in the game.">
+<link rel="stylesheet" href="src/styles.css">
+<link rel="stylesheet" href="src/worldpanel.css">
+</head>
+<body>
+<div id="app">
+  <header id="top">
+    <span class="brand">js2erz <small>JavaScript → Programmator</small></span>
+    <div class="grp">
+      <select id="exSel" aria-label="Examples"><option value="">Examples…</option></select>
+      <button id="bCompile" type="button" title="Compile now (Ctrl+Enter)">Compile</button>
+      <label title="Recompile while you type"><input type="checkbox" id="optLive" checked> live</label>
+    </div>
+    <div class="grp" id="progTabs" role="tablist" aria-label="Programs"></div>
+    <div class="grp right">
+      <button id="bLayout" type="button" title="Lay the graph out again">Re-layout</button>
+      <label title="Show node numbers"><input type="checkbox" id="optIdx" checked> numbers</label>
+      <button id="bPng" type="button" title="Download the graph as a PNG image">PNG</button>
+      <button id="bSvg" type="button" title="Download the graph as an SVG image">SVG</button>
+      <button id="bJson" type="button" title="Export the graph as JSON">JSON…</button>
+      <button id="bImport" type="button" title="Import a program from JSON">Import…</button>
+      <button id="bShare" type="button" title="Copy a link that contains the code">Share link</button>
+    </div>
+  </header>
+  <div id="banner" hidden></div>
+  <div id="main">
+    <section id="codePane" aria-label="Code">
+      <div id="editor"></div>
+      <div id="diag" aria-live="polite"></div>
+    </section>
+    <div class="split" id="split1" role="separator" aria-label="Resize code pane"></div>
+    <section id="graphPane" aria-label="Node graph">
+      <svg id="cv" xmlns="http://www.w3.org/2000/svg"></svg>
+      <div id="hud">
+        <span id="count"></span>
+        <button id="bUndo" type="button" title="Undo (Ctrl+Z)">↶</button>
+        <button id="bRedo" type="button" title="Redo (Ctrl+Y)">↷</button>
+        <button id="bFit" type="button" title="Show all (F)">Fit</button>
+        <button id="bZoomIn" type="button" title="Zoom in">+</button>
+        <button id="bZoomOut" type="button" title="Zoom out">−</button>
+      </div>
+      <nav id="palette" aria-label="Add a node"></nav>
+    </section>
+    <div class="split" id="split2" role="separator" aria-label="Resize side panel"></div>
+    <aside id="side">
+      <nav id="tabs" role="tablist">
+        <button type="button" data-tab="node" class="on">Node</button>
+        <button type="button" data-tab="world">Simulator</button>
+        <button type="button" data-tab="steps">Build list</button>
+        <button type="button" data-tab="ref">Reference</button>
+      </nav>
+      <div class="tab" id="tab-node"></div>
+      <div class="tab" id="tab-world" hidden></div>
+      <div class="tab" id="tab-steps" hidden></div>
+      <div class="tab" id="tab-ref" hidden></div>
+    </aside>
+  </div>
+</div>
+<div id="modal" hidden><div class="box" id="modalBox" role="dialog" aria-modal="true"></div></div>
+<script type="module" src="src/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+# internal notes and scratch work (not published)
+README_DEV.md
+.scratch/
+
+# tooling
+node_modules/
+*.log
+.claude/
+
+# editors and OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
