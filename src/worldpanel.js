@@ -96,7 +96,6 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
       <button type="button" class="wp-trig" data-k="seis.trigger" data-kt="seis.triggerTip"></button>
       <label class="wp-l" data-kt="seis.npsTip"><input class="wp-snps" type="number" min="1" step="1" style="width:72px"> <span data-k="seis.nps"></span></label>
       <label class="wp-l"><span data-k="seis.drillsIn"></span> <input class="wp-sdrills" type="number" min="0" step="1" style="width:52px"></label>
-      <label class="wp-l" data-kt="seis.safeTip"><input class="wp-ssafe" type="checkbox"> <span data-k="seis.safe"></span></label>
     </div>
     <div class="wp-row wp-items">${SIM_ITEMS.map(it => `<label class="wp-l"><span data-item-label="${it}"></span> <input type="number" min="0" step="1" data-item="${it}" style="width:56px"></label>`).join("")}</div>
     <div class="wp-info" aria-live="polite"></div>`;
@@ -117,11 +116,11 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
   const state = {
     world: stored?.world && stored.world.cells?.length === stored.world.W * stored.world.H ? stored.world : makeWorld(96, 72),
     settings: Object.assign({ dir: 0, speed: 40, brush: "Regolith", items: { RoadSector: 20, Block: 20, MiningCharge: 5 }, scenario: "asteroid",
-      seismic: { nps: SEISMIC_DEFAULTS.nodesPerSec, safe: false } }, stored?.settings || {}),
+      seismic: { nps: SEISMIC_DEFAULTS.nodesPerSec } }, stored?.settings || {}),
   };
   if (!SCENARIOS[state.settings.scenario]) state.settings.scenario = "asteroid";
   // simulator options for the seismic initiators (the rest are SEISMIC_DEFAULTS)
-  const seisCfg = () => ({ ...SEISMIC_DEFAULTS, nodesPerSec: Math.max(1, +state.settings.seismic.nps || SEISMIC_DEFAULTS.nodesPerSec), safeOnFootprint: !!state.settings.seismic.safe });
+  const seisCfg = () => ({ ...SEISMIC_DEFAULTS, nodesPerSec: Math.max(1, +state.settings.seismic.nps || SEISMIC_DEFAULTS.nodesPerSec) });
   let sim = null, paused = true, raf = 0, last = 0, acc = 0;
   const view = { cs: 8, ox: 0, oy: 0 };
   let fitted = false;
@@ -173,12 +172,11 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
     generate(state.world.seed ?? undefined);
   });
 
-  // seismic row: manual break, node rate, drills, footprint safety (shown when the world has an initiator)
-  const seisRow = $(".wp-seis"), snps = $(".wp-snps"), sdrills = $(".wp-sdrills"), ssafe = $(".wp-ssafe");
-  snps.value = state.settings.seismic.nps; ssafe.checked = !!state.settings.seismic.safe;
+  // seismic row: manual break, node rate, drills (shown when the world has an initiator)
+  const seisRow = $(".wp-seis"), snps = $(".wp-snps"), sdrills = $(".wp-sdrills");
+  snps.value = state.settings.seismic.nps;
   const resetIdle = () => { if (sim && (sim.status !== "run" || paused)) { reset(); onCurrent(null); } };
   snps.addEventListener("change", () => { state.settings.seismic.nps = Math.max(1, Math.floor(+snps.value || SEISMIC_DEFAULTS.nodesPerSec)); snps.value = state.settings.seismic.nps; save(state); resetIdle(); update(); });
-  ssafe.addEventListener("change", () => { state.settings.seismic.safe = ssafe.checked; save(state); resetIdle(); update(); });
   sdrills.addEventListener("change", () => {
     const n = Math.max(0, Math.floor(+sdrills.value || 0));
     for (const o of state.world.initiators || []) o.drills = n;
@@ -236,7 +234,7 @@ export function mountWorldPanel(root, { getPrograms, onCurrent = () => {} } = {}
     if (inits.length) {
       if (document.activeElement !== sdrills) sdrills.value = inits[0].drills;
       const busy = sim && sim.status === "run" && !paused;
-      sdrills.disabled = snps.disabled = ssafe.disabled = busy;
+      sdrills.disabled = snps.disabled = busy;
       $(".wp-trig").disabled = !!(sim && sim.seismic && sim.seismic.list.every(o => o.state === "breaking"));
     }
   }

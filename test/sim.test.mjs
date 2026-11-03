@@ -286,17 +286,14 @@ test("seismic: wave mode kills when the front arrives", () => {
   s.run(10); assert.equal(s.status, "done"); assert.ok(s.dead.step >= 49 && s.dead.step <= 51, `died at ${s.dead.step}`);
 });
 
-test("seismic: the footprint is safe only with safeOnFootprint", () => {
-  for (const safe of [false, true]) {
-    const w = rockRoom(); w.bot = { x: 30, y: 30 };
-    const s = createSim({ programs: progs(idle()), main: "m", world: w, seismic: { nodesPerSec: 1, safeOnFootprint: safe } });
-    s.step(); s.triggerBreak(); s.run(20);
-    assert.equal(s.dead == null, safe);
-    if (safe) {                                               // the cells around the body stay open where it stood
-      assert.equal(s.seismic.list[0].state, "idle");
-      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) assert.equal(cellAt(s.world, 30 + dx, 30 + dy), "Back");
-    }
-  }
+test("seismic: a bot standing on the initiator survives the break", () => {
+  const w = rockRoom(); w.bot = { x: 30, y: 30 };
+  const s = createSim({ programs: progs(idle()), main: "m", world: w, seismic: { nodesPerSec: 1 } });
+  s.step(); s.triggerBreak(); s.run(20);
+  assert.equal(s.dead, null);
+  assert.equal(s.seismic.list[0].state, "idle");
+  // the cells around the body stay open where it stood
+  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) assert.equal(cellAt(s.world, 30 + dx, 30 + dy), "Back");
 });
 
 test("seismic: no drills, no break; Block / Road can't go on the footprint", () => {

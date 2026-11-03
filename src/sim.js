@@ -177,11 +177,11 @@ export const cellAt = (w, x, y) => (x < 0 || y < 0 || x >= w.W || y >= w.H) ? "T
 //   rock is known (cells that were open from the start), the rock comes from `mix` (about 15% ore; unverified).
 // - Death: with `deathMode` "break" a bot dies when it is within the radius at any node of the break, its start
 //   included (the cautious reading); with "wave" it dies when the regrowth front reaches it (unverified; one bot died
-//   about 2 s after a break, 34 cells from the centre). `safeOnFootprint`: a bot whose centre is on a footprint
-//   survives (unverified). Distances are from the bot's centre cell.
+//   about 2 s after a break, 34 cells from the centre). A bot whose centre is on a footprint always survives,
+//   as in the game. Distances are from the bot's centre cell.
 export const SEISMIC_DEFAULTS = {
   nodesPerSec: 1000, workSec: 603, breakSec: 10, radius: 40, fade: 6, threshold: 0.8, offset: [1, 1],
-  safeOnFootprint: false, deathMode: "break", countUndiggable: false, seed: undefined,
+  deathMode: "break", countUndiggable: false, seed: undefined,
   mix: [["Regolith", 45], ["Chondrite", 25], ["Breccia", 15], ["SilicateRock", 5], ["SulfideRock", 5], ["DenseOre", 3], ["PhosphateRock", 2]],
 };
 export const FOOT = 2;   // footprint half size (5x5)
@@ -512,7 +512,7 @@ export function createSim({ programs, main, world, dir = 0, items = { RoadSector
       if (S.dead || S.status !== "run") return;
       const d = dist(o, S.bot.x, S.bot.y);
       if (d > R || d < front) return;
-      if (cfg.safeOnFootprint && onFoot(S.bot.x, S.bot.y)) return;
+      if (onFoot(S.bot.x, S.bot.y)) return;     // standing on the initiator is safe
       die(o);
     }
     function refill(o, upTo) {
