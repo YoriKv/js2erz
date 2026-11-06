@@ -27,6 +27,9 @@ code, kbd { font-family: var(--f-mono); font-size: 12.5px; }
 #top { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 8px 14px; background: var(--panel); border-bottom: 1px solid var(--line); }
 .brand { font: 700 19px/1 var(--f-title); letter-spacing: .05em; color: var(--accent); white-space: nowrap; }
 .brand small { font: 400 12px var(--f-body); color: var(--muted); letter-spacing: 0; margin-left: 6px; }
+.brandbox { display: flex; flex-direction: column; gap: 3px; }
+.credit { font-size: 11px; line-height: 1; color: var(--muted); text-decoration: none; white-space: nowrap; }
+.credit:hover { color: var(--accent); text-decoration: underline; }
 .grp { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .grp.right { margin-left: auto; }
 #exSel { width: 7.5em; }
