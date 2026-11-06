@@ -1,6 +1,6 @@
 # js2erz
 
-<sub>Simulator based on the [erzstat.site Programmator simulator](https://erzstat.site/programs/prog.html).</sub>
+Simulator based on the [erzstat.site Programmator simulator](https://erzstat.site/programs/prog.html).
 
 Write a bot program for **ERZ Online** in JavaScript and get a picture of the Programmator node graph, so you can rebuild it
 in the game.
